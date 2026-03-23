@@ -158,7 +158,8 @@ export const productsApi = {
     refreshInterval?: number,
     selectedPrice?: number,
     selectedMethod?: string,
-    siteContext?: SiteContext
+    siteContext?: SiteContext,
+    selectedCurrency?: string
   ) =>
     api.post<CreateProductResponse>('/products', {
       url,
@@ -166,6 +167,7 @@ export const productsApi = {
       selectedPrice,
       selectedMethod,
       siteContext,
+      selectedCurrency,
     }),
 
   update: (id: number, data: {

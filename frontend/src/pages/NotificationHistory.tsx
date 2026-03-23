@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { notificationsApi, NotificationHistoryEntry, NotificationType } from '../api/client';
+import { formatCurrencyValue } from '../utils/currency';
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString);
@@ -42,10 +43,7 @@ function getNotificationTypeLabel(type: NotificationType): string {
 
 function formatPrice(price: number | string | null, currency: string | null): string {
   if (price === null || price === undefined) return '-';
-  const numPrice = typeof price === 'string' ? parseFloat(price) : price;
-  if (isNaN(numPrice)) return '-';
-  const symbol = currency === 'EUR' ? '\u20AC' : currency === 'GBP' ? '\u00A3' : currency === 'CHF' ? 'CHF ' : '$';
-  return `${symbol}${numPrice.toFixed(2)}`;
+  return formatCurrencyValue(price, currency);
 }
 
 function getChannelIcon(channel: string): string {

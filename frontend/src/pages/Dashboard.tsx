@@ -155,7 +155,7 @@ export default function Dashboard() {
     setPendingSiteContext(undefined);
   };
 
-  const handlePriceSelected = async (selectedPrice: number, selectedMethod: string) => {
+  const handlePriceSelected = async (selectedPrice: number, selectedMethod: string, selectedCurrency: string) => {
     if (!priceReviewData) return;
 
     const response = await productsApi.create(
@@ -163,7 +163,8 @@ export default function Dashboard() {
       pendingRefreshInterval,
       selectedPrice,
       selectedMethod,
-      pendingSiteContext
+      pendingSiteContext,
+      selectedCurrency
     );
 
     // When selecting a price, the API should always return a Product

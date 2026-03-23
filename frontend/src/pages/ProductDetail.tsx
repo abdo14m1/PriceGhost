@@ -5,6 +5,7 @@ import PriceChart from '../components/PriceChart';
 import StockTimeline from '../components/StockTimeline';
 import AIStatusBadge from '../components/AIStatusBadge';
 import { useToast } from '../context/ToastContext';
+import { formatCurrencyValue } from '../utils/currency';
 import {
   productsApi,
   pricesApi,
@@ -162,14 +163,6 @@ export default function ProductDetail() {
     }
   };
 
-  const formatPrice = (price: number | string | null, currency: string | null) => {
-    if (price === null || price === undefined) return 'N/A';
-    const numPrice = typeof price === 'string' ? parseFloat(price) : price;
-    if (isNaN(numPrice)) return 'N/A';
-    const currencySymbol =
-      currency === 'EUR' ? '€' : currency === 'GBP' ? '£' : currency === 'CHF' ? 'CHF ' : '$';
-    return `${currencySymbol}${numPrice.toFixed(2)}`;
-  };
 
   if (isLoading) {
     return (
@@ -451,7 +444,7 @@ export default function ProductDetail() {
               <span>
                 {product.stock_status === 'out_of_stock'
                   ? 'Price unavailable'
-                  : formatPrice(product.current_price, product.currency)}
+                  : formatCurrencyValue(product.current_price, product.currency)}
               </span>
               {product.stock_status !== 'out_of_stock' && (
                 <AIStatusBadge status={product.ai_status} />
