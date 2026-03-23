@@ -33,8 +33,20 @@ export default function StorefrontSelectionModal({
   };
 
   return (
-    <div className="price-modal-overlay">
+    <div className="storefront-modal-overlay">
       <style>{`
+        .storefront-modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.5);
+          backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 1rem;
+        }
+
         .storefront-modal {
           background: var(--surface);
           border-radius: 1rem;
@@ -106,12 +118,6 @@ export default function StorefrontSelectionModal({
           color: var(--text);
         }
 
-        .storefront-option-meta {
-          font-size: 0.8rem;
-          color: var(--text-muted);
-          margin-top: 0.15rem;
-        }
-
         .storefront-modal-footer {
           padding: 1rem 1.5rem;
           border-top: 1px solid var(--border);
@@ -138,11 +144,6 @@ export default function StorefrontSelectionModal({
             >
               <div className="storefront-option-left">
                 <span className="storefront-option-name">{option.label}</span>
-                <span className="storefront-option-meta">
-                  {typeof option.context.countryCode === 'string' ? option.context.countryCode : 'N/A'}
-                  {typeof option.context.language === 'string' ? ` · ${option.context.language}` : ''}
-                  {typeof option.context.storefrontId === 'string' ? ` · Store ${option.context.storefrontId}` : ''}
-                </span>
               </div>
             </div>
           ))}
