@@ -44,6 +44,11 @@ export default function PriceSelectionModal({
   suggestedPrice,
   url,
 }: PriceSelectionModalProps) {
+  const suggestedKey = useMemo(() => {
+    if (!suggestedPrice) return null;
+    return `${suggestedPrice.currency.toUpperCase()}|${suggestedPrice.price.toFixed(2)}`;
+  }, [suggestedPrice?.currency, suggestedPrice?.price]);
+
   const groupedCandidates = useMemo(() => {
     const groups = new Map<string, { key: string; entries: Array<{ candidate: PriceCandidate; index: number }> }>();
 
@@ -88,6 +93,12 @@ export default function PriceSelectionModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
+    if (isOpen) return;
+    setSelectedKey(null);
+    setIsSubmitting(false);
+  }, [isOpen]);
+
+  useEffect(() => {
     if (!isOpen) return;
 
     if (groupedCandidates.length === 0) {
@@ -95,17 +106,17 @@ export default function PriceSelectionModal({
       return;
     }
 
-    if (suggestedPrice) {
-      const suggestedKey = `${suggestedPrice.currency.toUpperCase()}|${suggestedPrice.price.toFixed(2)}`;
-      const hasSuggested = groupedCandidates.some((candidate) => candidate.key === suggestedKey);
-      setSelectedKey(hasSuggested ? suggestedKey : groupedCandidates[0].key);
+    if (selectedKey && groupedCandidates.some((candidate) => candidate.key === selectedKey)) {
       return;
     }
 
-    if (!selectedKey || !groupedCandidates.some((candidate) => candidate.key === selectedKey)) {
-      setSelectedKey(groupedCandidates[0].key);
+    if (suggestedKey && groupedCandidates.some((candidate) => candidate.key === suggestedKey)) {
+      setSelectedKey(suggestedKey);
+      return;
     }
-  }, [isOpen, groupedCandidates, suggestedPrice, selectedKey]);
+
+    setSelectedKey(groupedCandidates[0].key);
+  }, [isOpen, groupedCandidates, selectedKey, suggestedKey]);
 
   if (!isOpen) return null;
 
