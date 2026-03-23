@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { formatCurrencyValue } from '../utils/currency';
 
 export interface PriceCandidate {
@@ -44,18 +44,76 @@ export default function PriceSelectionModal({
   suggestedPrice,
   url,
 }: PriceSelectionModalProps) {
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(
-    suggestedPrice
-      ? candidates.findIndex(c => c.price === suggestedPrice.price)
-      : 0
-  );
+  const groupedCandidates = useMemo(() => {
+    const groups = new Map<string, { key: string; entries: Array<{ candidate: PriceCandidate; index: number }> }>();
+
+    candidates.forEach((candidate, index) => {
+      const key = `${candidate.currency.toUpperCase()}|${candidate.price.toFixed(2)}`;
+      if (!groups.has(key)) {
+        groups.set(key, { key, entries: [] });
+      }
+      groups.get(key)!.entries.push({ candidate, index });
+    });
+
+    return Array.from(groups.values())
+      .map((group) => {
+        const sortedEntries = [...group.entries].sort((a, b) => b.candidate.confidence - a.candidate.confidence);
+        const representative = sortedEntries[0];
+        const methods = Array.from(new Set(group.entries.map((entry) => METHOD_LABELS[entry.candidate.method] || entry.candidate.method)));
+        const context = methods.length > 1
+          ? `Confirmed by ${methods.join(' + ')}`
+          : (representative.candidate.context ||
+             METHOD_DESCRIPTIONS[representative.candidate.method] ||
+             'No additional context');
+
+        return {
+          key: group.key,
+          representative,
+          supportCount: group.entries.length,
+          context,
+        };
+      })
+      .sort((a, b) => {
+        if (b.representative.candidate.confidence !== a.representative.candidate.confidence) {
+          return b.representative.candidate.confidence - a.representative.candidate.confidence;
+        }
+        if (b.supportCount !== a.supportCount) {
+          return b.supportCount - a.supportCount;
+        }
+        return 0;
+      });
+  }, [candidates]);
+
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (groupedCandidates.length === 0) {
+      setSelectedKey(null);
+      return;
+    }
+
+    if (suggestedPrice) {
+      const suggestedKey = `${suggestedPrice.currency.toUpperCase()}|${suggestedPrice.price.toFixed(2)}`;
+      const hasSuggested = groupedCandidates.some((candidate) => candidate.key === suggestedKey);
+      setSelectedKey(hasSuggested ? suggestedKey : groupedCandidates[0].key);
+      return;
+    }
+
+    if (!selectedKey || !groupedCandidates.some((candidate) => candidate.key === selectedKey)) {
+      setSelectedKey(groupedCandidates[0].key);
+    }
+  }, [isOpen, groupedCandidates, suggestedPrice, selectedKey]);
 
   if (!isOpen) return null;
 
   const handleSelect = async () => {
-    if (selectedIndex === null || selectedIndex < 0) return;
-    const selected = candidates[selectedIndex];
+    if (!selectedKey) return;
+    const selectedGroup = groupedCandidates.find((candidate) => candidate.key === selectedKey);
+    if (!selectedGroup) return;
+    const selected = selectedGroup.representative.candidate;
     setIsSubmitting(true);
     try {
       await onSelect(selected.price, selected.method, selected.currency);
@@ -75,9 +133,6 @@ export default function PriceSelectionModal({
     if (confidence >= 0.6) return '#f59e0b';
     return '#6b7280';
   };
-
-  // Sort candidates by confidence (highest first)
-  const sortedCandidates = [...candidates].sort((a, b) => b.confidence - a.confidence);
 
   return (
     <div className="price-modal-overlay">
@@ -262,10 +317,10 @@ export default function PriceSelectionModal({
       <div className="price-modal">
         <div className="price-modal-header">
           <h2 className="price-modal-title">
-            {candidates.length > 1 ? 'Multiple Prices Found' : 'Confirm Price'}
+            {groupedCandidates.length > 1 ? 'Multiple Prices Found' : 'Confirm Price'}
           </h2>
           <p className="price-modal-subtitle">
-            {candidates.length > 1
+            {groupedCandidates.length > 1
               ? 'We found different prices for this product. Please select the correct one.'
               : 'Please verify this is the correct price for the product.'}
           </p>
@@ -283,13 +338,13 @@ export default function PriceSelectionModal({
 
         <div className="price-modal-body">
           <div className="price-candidates-list">
-            {sortedCandidates.map((candidate, index) => {
-              const originalIndex = candidates.indexOf(candidate);
+            {groupedCandidates.map((candidateGroup) => {
+              const candidate = candidateGroup.representative.candidate;
               return (
                 <div
-                  key={index}
-                  className={`price-candidate ${selectedIndex === originalIndex ? 'selected' : ''}`}
-                  onClick={() => setSelectedIndex(originalIndex)}
+                  key={candidateGroup.key}
+                  className={`price-candidate ${selectedKey === candidateGroup.key ? 'selected' : ''}`}
+                  onClick={() => setSelectedKey(candidateGroup.key)}
                 >
                   <div className="price-candidate-check">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -311,7 +366,7 @@ export default function PriceSelectionModal({
                     {METHOD_LABELS[candidate.method] || candidate.method}
                   </div>
                   <div className="price-candidate-context">
-                    {candidate.context || METHOD_DESCRIPTIONS[candidate.method] || 'No additional context'}
+                    {candidateGroup.context}
                   </div>
                 </div>
               );
@@ -326,7 +381,7 @@ export default function PriceSelectionModal({
           <button
             className="btn btn-primary"
             onClick={handleSelect}
-            disabled={selectedIndex === null || isSubmitting}
+            disabled={selectedKey === null || isSubmitting}
           >
             {isSubmitting ? <span className="spinner" /> : 'Confirm Selection'}
           </button>
