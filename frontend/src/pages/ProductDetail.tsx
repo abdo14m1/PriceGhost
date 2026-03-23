@@ -10,6 +10,7 @@ import {
   productsApi,
   pricesApi,
   settingsApi,
+  isAIQuotaErrorResponse,
   ProductWithStats,
   PriceHistory,
   NotificationSettings,
@@ -96,8 +97,15 @@ export default function ProductDetail() {
       await pricesApi.refresh(productId);
       await fetchData(30);
       showToast('Price refreshed');
-    } catch {
-      showToast('Failed to refresh price', 'error');
+    } catch (err: unknown) {
+      const apiError = err as { response?: { data?: unknown } };
+      const responseData = apiError.response?.data;
+
+      if (isAIQuotaErrorResponse(responseData)) {
+        showToast(`${responseData.title}. ${responseData.message}`, 'error');
+      } else {
+        showToast('Failed to refresh price', 'error');
+      }
     } finally {
       setIsRefreshing(false);
     }

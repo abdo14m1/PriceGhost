@@ -7,6 +7,7 @@ import StorefrontSelectionModal from '../components/StorefrontSelectionModal';
 import {
   productsApi,
   pricesApi,
+  isAIQuotaErrorResponse,
   Product,
   PriceReviewResponse,
   StorefrontSelectionResponse,
@@ -120,32 +121,42 @@ export default function Dashboard() {
 
     const siteContext: SiteContext = option.context;
 
-    const response = await productsApi.create(
-      pendingAddUrl,
-      pendingRefreshInterval,
-      undefined,
-      undefined,
-      siteContext
-    );
+    try {
+      const response = await productsApi.create(
+        pendingAddUrl,
+        pendingRefreshInterval,
+        undefined,
+        undefined,
+        siteContext
+      );
 
-    if (isPriceReviewResponse(response.data)) {
-      setPendingSiteContext(siteContext);
+      if (isPriceReviewResponse(response.data)) {
+        setPendingSiteContext(siteContext);
+        setShowStorefrontModal(false);
+        setPriceReviewData(response.data);
+        setShowPriceModal(true);
+        return;
+      }
+
+      if (isStorefrontSelectionResponse(response.data)) {
+        setRegionalGateData(response.data.regionalGate);
+        return;
+      }
+
+      setProducts((prev) => [response.data as Product, ...prev]);
       setShowStorefrontModal(false);
-      setPriceReviewData(response.data);
-      setShowPriceModal(true);
-      return;
+      setRegionalGateData(null);
+      setPendingAddUrl(null);
+      setPendingSiteContext(undefined);
+    } catch (err: unknown) {
+      const apiError = err as { response?: { data?: unknown } };
+      const responseData = apiError.response?.data;
+      if (isAIQuotaErrorResponse(responseData)) {
+        setError(`${responseData.title}. ${responseData.message}`);
+      } else {
+        setError('Failed to add product');
+      }
     }
-
-    if (isStorefrontSelectionResponse(response.data)) {
-      setRegionalGateData(response.data.regionalGate);
-      return;
-    }
-
-    setProducts((prev) => [response.data as Product, ...prev]);
-    setShowStorefrontModal(false);
-    setRegionalGateData(null);
-    setPendingAddUrl(null);
-    setPendingSiteContext(undefined);
   };
 
   const handleStorefrontModalClose = () => {
@@ -158,22 +169,32 @@ export default function Dashboard() {
   const handlePriceSelected = async (selectedPrice: number, selectedMethod: string, selectedCurrency: string) => {
     if (!priceReviewData) return;
 
-    const response = await productsApi.create(
-      priceReviewData.url,
-      pendingRefreshInterval,
-      selectedPrice,
-      selectedMethod,
-      pendingSiteContext,
-      selectedCurrency
-    );
+    try {
+      const response = await productsApi.create(
+        priceReviewData.url,
+        pendingRefreshInterval,
+        selectedPrice,
+        selectedMethod,
+        pendingSiteContext,
+        selectedCurrency
+      );
 
-    // When selecting a price, the API should always return a Product
-    if (!isPriceReviewResponse(response.data)) {
-      setProducts((prev) => [response.data as Product, ...prev]);
+      // When selecting a price, the API should always return a Product
+      if (!isPriceReviewResponse(response.data)) {
+        setProducts((prev) => [response.data as Product, ...prev]);
+      }
+      setShowPriceModal(false);
+      setPriceReviewData(null);
+      setPendingSiteContext(undefined);
+    } catch (err: unknown) {
+      const apiError = err as { response?: { data?: unknown } };
+      const responseData = apiError.response?.data;
+      if (isAIQuotaErrorResponse(responseData)) {
+        setError(`${responseData.title}. ${responseData.message}`);
+      } else {
+        setError('Failed to add product');
+      }
     }
-    setShowPriceModal(false);
-    setPriceReviewData(null);
-    setPendingSiteContext(undefined);
   };
 
   const handlePriceModalClose = () => {
@@ -200,8 +221,14 @@ export default function Dashboard() {
       await pricesApi.refresh(id);
       // Refresh the products list to get updated data
       await fetchProducts();
-    } catch {
-      alert('Failed to refresh price');
+    } catch (err: unknown) {
+      const apiError = err as { response?: { data?: unknown } };
+      const responseData = apiError.response?.data;
+      if (isAIQuotaErrorResponse(responseData)) {
+        setError(`${responseData.title}. ${responseData.message}`);
+      } else {
+        alert('Failed to refresh price');
+      }
     }
   };
 

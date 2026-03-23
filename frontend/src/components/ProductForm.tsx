@@ -1,4 +1,5 @@
 import { useState, FormEvent } from 'react';
+import { isAIQuotaErrorResponse } from '../api/client';
 
 interface ProductFormProps {
   onSubmit: (url: string, refreshInterval: number) => Promise<boolean | void>;
@@ -43,9 +44,13 @@ export default function ProductForm({ onSubmit }: ProductFormProps) {
         setRefreshInterval(3600);
       }
     } catch (err) {
-      if (err instanceof Error) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const axiosError = err as any;
+      const maybeError = err as { response?: { data?: unknown } };
+      const responseData = maybeError.response?.data;
+
+      if (isAIQuotaErrorResponse(responseData)) {
+        setError(`${responseData.title}. ${responseData.message}`);
+      } else if (err instanceof Error) {
+        const axiosError = err as { response?: { data?: { error?: string } } };
         setError(axiosError.response?.data?.error || 'Failed to add product');
       } else {
         setError('Failed to add product');

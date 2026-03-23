@@ -6,6 +6,7 @@ import {
   settingsApi,
   profileApi,
   adminApi,
+  isAIQuotaErrorResponse,
   NotificationSettings,
   AISettings,
   UserProfile,
@@ -544,8 +545,15 @@ export default function Settings() {
       } else {
         setError('AI could not extract price from this URL');
       }
-    } catch {
-      setError('Failed to test AI extraction');
+    } catch (err: unknown) {
+      const apiError = err as { response?: { data?: unknown } };
+      const responseData = apiError.response?.data;
+
+      if (isAIQuotaErrorResponse(responseData)) {
+        setError(`${responseData.title}. ${responseData.message}`);
+      } else {
+        setError('Failed to test AI extraction');
+      }
     } finally {
       setIsTestingAI(false);
     }

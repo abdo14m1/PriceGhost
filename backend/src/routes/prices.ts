@@ -2,6 +2,10 @@ import { Router, Response } from 'express';
 import { AuthRequest, authMiddleware } from '../middleware/auth';
 import { productQueries, priceHistoryQueries, stockStatusHistoryQueries } from '../models';
 import { scrapeProductWithVoting, ExtractionMethod, SiteContext } from '../services/scraper';
+import {
+  getAIQuotaWarningFromThrown,
+  toAIQuotaErrorResponse,
+} from '../utils/aiWarnings';
 
 const router = Router();
 
@@ -95,6 +99,14 @@ router.post('/:productId/refresh', async (req: AuthRequest, res: Response) => {
         scrapedData.price.currency,
         scrapedData.aiStatus
       );
+    } else if (scrapedData.stockStatus !== 'out_of_stock') {
+      const quotaWarning = (scrapedData.warnings || []).find(
+        (warning) => warning.code === 'AI_QUOTA_EXHAUSTED'
+      );
+      if (quotaWarning) {
+        res.status(429).json(toAIQuotaErrorResponse(quotaWarning));
+        return;
+      }
     }
 
     // Update last_checked timestamp and schedule next check
@@ -109,6 +121,12 @@ router.post('/:productId/refresh', async (req: AuthRequest, res: Response) => {
       aiStatus: scrapedData.aiStatus,
     });
   } catch (error) {
+    const quotaWarning = getAIQuotaWarningFromThrown(error);
+    if (quotaWarning) {
+      res.status(429).json(toAIQuotaErrorResponse(quotaWarning));
+      return;
+    }
+
     console.error('Error refreshing price:', error);
     res.status(500).json({ error: 'Failed to refresh price' });
   }

@@ -9,6 +9,10 @@ import {
   ExtractionMethod,
   SiteContext,
 } from '../services/scraper';
+import {
+  getAIQuotaWarningFromThrown,
+  toAIQuotaErrorResponse,
+} from '../utils/aiWarnings';
 import { normalizeUrl } from '../utils/urlNormalizer';
 
 const router = Router();
@@ -189,6 +193,22 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
     // Allow adding out-of-stock products, but require a price for in-stock ones
     if (!scrapedData.price && scrapedData.stockStatus !== 'out_of_stock') {
+      const quotaWarning = (scrapedData.warnings || []).find(
+        (warning) => warning.code === 'AI_QUOTA_EXHAUSTED'
+      );
+
+      if (quotaWarning) {
+        res.status(429).json(toAIQuotaErrorResponse(quotaWarning));
+        return;
+      }
+
+      if (scrapedData.warnings && scrapedData.warnings.length > 0) {
+        console.warn(
+          '[Products] AI warning(s) observed during extraction:',
+          scrapedData.warnings.map((warning) => `${warning.code}:${warning.provider}`).join(', ')
+        );
+      }
+
       res.status(400).json({
         error: 'Could not extract price from the provided URL',
       });
@@ -270,6 +290,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
     res.status(201).json(productWithPrice);
   } catch (error) {
+    const quotaWarning = getAIQuotaWarningFromThrown(error);
+    if (quotaWarning) {
+      res.status(429).json(toAIQuotaErrorResponse(quotaWarning));
+      return;
+    }
+
     // Handle unique constraint violation
     if (
       error instanceof Error &&

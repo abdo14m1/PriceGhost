@@ -30,6 +30,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-this-in-production-use-strong-secret}
       PORT: 3001
       NODE_ENV: production
+      HOME: /tmp
+      XDG_CONFIG_HOME: /tmp/.chromium
+      XDG_CACHE_HOME: /tmp/.chromium
+      CHROMIUM_USER_DATA_DIR: /tmp/chrome-user-data
+      CHROMIUM_CRASH_DUMPS_DIR: /tmp/chrome-crashpad
     ports:
       - "3001:3001"
     depends_on:

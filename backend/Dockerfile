@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-slim AS builder
+FROM node:25-slim AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:20-slim AS production
+FROM node:25-slim AS production
 
 WORKDIR /app
 
@@ -47,6 +47,11 @@ RUN apt-get update && apt-get install -y \
 # Set Puppeteer to use installed Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV HOME=/tmp
+ENV XDG_CONFIG_HOME=/tmp/.chromium
+ENV XDG_CACHE_HOME=/tmp/.chromium
+ENV CHROMIUM_USER_DATA_DIR=/tmp/chrome-user-data
+ENV CHROMIUM_CRASH_DUMPS_DIR=/tmp/chrome-crashpad
 
 # Copy package files
 COPY package*.json ./
@@ -60,8 +65,11 @@ COPY --from=builder /app/dist ./dist
 # Create non-root user
 RUN groupadd -r nodejs && useradd -r -g nodejs nodejs
 
+# Ensure Chromium runtime directories are writable in container
+RUN mkdir -p /tmp/.chromium /tmp/chrome-user-data /tmp/chrome-crashpad
+
 # Change ownership of app directory
-RUN chown -R nodejs:nodejs /app
+RUN chown -R nodejs:nodejs /app /tmp/.chromium /tmp/chrome-user-data /tmp/chrome-crashpad
 
 USER nodejs
 

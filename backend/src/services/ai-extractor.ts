@@ -5,6 +5,11 @@ import axios from 'axios';
 import { load } from 'cheerio';
 import { AISettings } from '../models';
 import { ParsedPrice } from '../utils/priceParser';
+import {
+  createAIWarningError,
+  getAIQuotaWarningFromError,
+  getAIQuotaWarningFromThrown,
+} from '../utils/aiWarnings';
 import { StockStatus, PriceCandidate } from './scraper';
 
 // Strip thinking mode tags from model responses (Qwen3, DeepSeek, etc.)
@@ -36,6 +41,13 @@ export interface AIStockStatusResult {
   stockStatus: StockStatus;
   confidence: number;
   reason: string;
+}
+
+function assertNoQuotaWarning(error: unknown, context: 'product_extraction' | 'settings_ai_test'): void {
+  const warning = getAIQuotaWarningFromError(error, context, 'gemini');
+  if (warning) {
+    throw createAIWarningError(warning, error);
+  }
 }
 
 const VERIFICATION_PROMPT = `You are a price and availability verification assistant. I scraped a product page and found a price. Please verify if this price is correct AND if the product is currently available for purchase.
@@ -812,7 +824,12 @@ export async function extractWithAI(
   } else if (settings.ai_provider === 'ollama' && settings.ollama_base_url && settings.ollama_model) {
     return extractWithOllama(html, settings.ollama_base_url, settings.ollama_model);
   } else if (settings.ai_provider === 'gemini' && settings.gemini_api_key) {
-    return extractWithGemini(html, settings.gemini_api_key, settings.gemini_model);
+    try {
+      return await extractWithGemini(html, settings.gemini_api_key, settings.gemini_model);
+    } catch (error) {
+      assertNoQuotaWarning(error, 'settings_ai_test');
+      throw error;
+    }
   }
 
   throw new Error('No valid AI provider configured');
@@ -848,11 +865,19 @@ export async function tryAIExtraction(
     } else if (settings.ai_provider === 'gemini' && settings.gemini_api_key) {
       const modelToUse = settings.gemini_model || DEFAULT_GEMINI_MODEL;
       console.log(`[AI] Using Gemini (${modelToUse}) for ${url}`);
-      return await extractWithGemini(html, settings.gemini_api_key, settings.gemini_model);
+      try {
+        return await extractWithGemini(html, settings.gemini_api_key, settings.gemini_model);
+      } catch (error) {
+        assertNoQuotaWarning(error, 'product_extraction');
+        throw error;
+      }
     }
 
     return null;
   } catch (error) {
+    if (getAIQuotaWarningFromThrown(error)) {
+      throw error;
+    }
     console.error(`[AI] Extraction failed for ${url}:`, error);
     return null;
   }
@@ -890,12 +915,20 @@ export async function tryAIVerification(
     } else if (settings.ai_provider === 'gemini' && settings.gemini_api_key) {
       const modelToUse = settings.gemini_model || DEFAULT_GEMINI_MODEL;
       console.log(`[AI Verify] Using Gemini (${modelToUse}) to verify $${scrapedPrice} for ${url}`);
-      return await verifyWithGemini(html, scrapedPrice, currency, settings.gemini_api_key, settings.gemini_model);
+      try {
+        return await verifyWithGemini(html, scrapedPrice, currency, settings.gemini_api_key, settings.gemini_model);
+      } catch (error) {
+        assertNoQuotaWarning(error, 'product_extraction');
+        throw error;
+      }
     }
 
     console.log(`[AI Verify] Verification enabled but no provider configured`);
     return null;
   } catch (error) {
+    if (getAIQuotaWarningFromThrown(error)) {
+      throw error;
+    }
     console.error(`[AI Verify] Verification failed for ${url}:`, error);
     return null;
   }
@@ -933,12 +966,20 @@ export async function tryAIStockStatusVerification(
     } else if (settings.ai_provider === 'gemini' && settings.gemini_api_key) {
       const modelToUse = settings.gemini_model || DEFAULT_GEMINI_MODEL;
       console.log(`[AI Stock] Using Gemini (${modelToUse}) to verify stock status for $${variantPrice} variant at ${url}`);
-      return await verifyStockStatusWithGemini(html, variantPrice, currency, settings.gemini_api_key, settings.gemini_model);
+      try {
+        return await verifyStockStatusWithGemini(html, variantPrice, currency, settings.gemini_api_key, settings.gemini_model);
+      } catch (error) {
+        assertNoQuotaWarning(error, 'product_extraction');
+        throw error;
+      }
     }
 
     console.log(`[AI Stock] No AI provider configured for stock status verification`);
     return null;
   } catch (error) {
+    if (getAIQuotaWarningFromThrown(error)) {
+      throw error;
+    }
     console.error(`[AI Stock] Stock status verification failed for ${url}:`, error);
     return null;
   }
@@ -1187,12 +1228,20 @@ export async function tryAIArbitration(
     } else if (settings.ai_provider === 'gemini' && settings.gemini_api_key) {
       const modelToUse = settings.gemini_model || DEFAULT_GEMINI_MODEL;
       console.log(`[AI Arbitrate] Using Gemini (${modelToUse}) to arbitrate ${candidates.length} prices for ${url}`);
-      return await arbitrateWithGemini(html, candidates, settings.gemini_api_key, settings.gemini_model);
+      try {
+        return await arbitrateWithGemini(html, candidates, settings.gemini_api_key, settings.gemini_model);
+      } catch (error) {
+        assertNoQuotaWarning(error, 'product_extraction');
+        throw error;
+      }
     }
 
     console.log(`[AI Arbitrate] No provider configured`);
     return null;
   } catch (error) {
+    if (getAIQuotaWarningFromThrown(error)) {
+      throw error;
+    }
     console.error(`[AI Arbitrate] Arbitration failed for ${url}:`, error);
     return null;
   }
