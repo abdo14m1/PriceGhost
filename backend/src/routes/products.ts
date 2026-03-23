@@ -73,7 +73,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 router.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const { refresh_interval, selectedPrice, selectedMethod } = req.body;
+    const { refresh_interval, selectedPrice, selectedMethod, selectedCurrency } = req.body;
     let { url } = req.body;
     const siteContext = sanitizeSiteContext(req.body.siteContext);
 
@@ -144,7 +144,9 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       await priceHistoryQueries.create(
         product.id,
         selectedPrice,
-        'USD', // TODO: Get currency from selection
+        typeof selectedCurrency === 'string' && selectedCurrency.trim()
+          ? selectedCurrency.trim().toUpperCase()
+          : (scrapedData.price?.currency || 'USD'),
         null
       );
 

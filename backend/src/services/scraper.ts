@@ -137,6 +137,55 @@ function findPriceConsensus(candidates: PriceCandidate[]): { price: PriceCandida
 // Extract price candidates from JSON-LD structured data
 function extractJsonLdCandidates($: CheerioAPI): PriceCandidate[] {
   const candidates: PriceCandidate[] = [];
+  const seen = new Set<string>();
+
+  const addCandidate = (priceValue: unknown, currencyValue: unknown, productName?: string) => {
+    if (priceValue === undefined || priceValue === null) return;
+
+    let price = Number.NaN;
+    if (typeof priceValue === 'number') {
+      price = priceValue;
+    } else {
+      const raw = String(priceValue);
+      const normalized = raw.replace(/,/g, '.');
+      const parsed = parseFloat(normalized);
+      if (!isNaN(parsed)) {
+        price = parsed;
+      } else {
+        const parsedPrice = parsePrice(raw);
+        if (parsedPrice) {
+          price = parsedPrice.price;
+        }
+      }
+    }
+
+    if (!isFinite(price) || price <= 0) return;
+
+    const currency = String(currencyValue || 'USD').toUpperCase();
+    const key = `${price}|${currency}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    candidates.push({
+      price,
+      currency,
+      method: 'json-ld',
+      context: `Structured data: ${productName || 'Product'}`,
+      confidence: 0.9,
+    });
+  };
+
+  const collectFromNode = (product: JsonLdProduct | null | undefined) => {
+    if (!product?.offers) return;
+    const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
+    const currency = offer.priceCurrency || offer.priceSpecification?.priceCurrency || 'USD';
+
+    addCandidate(offer.price, currency, product.name);
+    addCandidate(offer.lowPrice, currency, product.name);
+    addCandidate(offer.highPrice, currency, product.name);
+    addCandidate(offer.priceSpecification?.price, currency, product.name);
+  };
+
   try {
     const scripts = $('script[type="application/ld+json"]');
     for (let i = 0; i < scripts.length; i++) {
@@ -144,26 +193,19 @@ function extractJsonLdCandidates($: CheerioAPI): PriceCandidate[] {
       if (!content) continue;
 
       const data = JSON.parse(content) as JsonLdProduct | JsonLdProduct[];
-      const product = findProduct(data);
+      const roots = Array.isArray(data) ? data : [data];
 
-      if (product?.offers) {
-        const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
-        const priceValue = offer.lowPrice || offer.price || offer.priceSpecification?.price;
-        const currency = offer.priceCurrency || offer.priceSpecification?.priceCurrency || 'USD';
-
-        if (priceValue) {
-          const price = parseFloat(String(priceValue));
-          if (!isNaN(price) && price > 0) {
-            candidates.push({
-              price,
-              currency,
-              method: 'json-ld',
-              context: `Structured data: ${product.name || 'Product'}`,
-              confidence: 0.9, // JSON-LD is highly reliable
-            });
+      for (const root of roots) {
+        collectFromNode(root);
+        if (Array.isArray(root['@graph'])) {
+          for (const graphNode of root['@graph']) {
+            collectFromNode(graphNode);
           }
         }
       }
+
+      const product = findProduct(data);
+      collectFromNode(product);
     }
   } catch (_e) {
     // JSON parse error
@@ -302,6 +344,11 @@ function isLikelyRegionalGate(html: string, finalUrl: string): boolean {
   return htmlLower.includes('please select your country for shopping') ||
     htmlLower.includes('welcome to trendyol') ||
     htmlLower.includes('m-country-selection');
+}
+
+function isPlaceholderProductName(name: string | null): boolean {
+  if (!name) return false;
+  return /trendyol:\s*shop from essentials to extras/i.test(name.trim());
 }
 
 function parseTrendyolCountrySelectionFromStreamPayload(payload: string): RegionalGateOption[] {
@@ -564,6 +611,73 @@ export function extractTrendyolCandidates(
 
   // Fallback to HTML selectors
   if (candidates.length === 0) {
+    // Trendyol international pages often expose reliable price in JSON-LD ProductGroup offers
+    try {
+      const scripts = $('script[type="application/ld+json"]');
+      for (let i = 0; i < scripts.length; i++) {
+        const content = $(scripts[i]).html();
+        if (!content) continue;
+
+        const data = JSON.parse(content) as JsonLdProduct | JsonLdProduct[];
+        const roots = Array.isArray(data) ? data : [data];
+        for (const root of roots) {
+          if (!root || typeof root !== 'object') continue;
+          if (!name && root.name) name = root.name;
+          if (!imageUrl && root.image) {
+            if (Array.isArray(root.image)) {
+              imageUrl = String(root.image[0] || '') || null;
+            } else if (typeof root.image === 'string') {
+              imageUrl = root.image;
+            } else if (typeof root.image === 'object' && root.image && 'url' in root.image) {
+              imageUrl = root.image.url ? String(root.image.url) : null;
+            }
+          }
+
+          if (root.offers) {
+            const offer = Array.isArray(root.offers) ? root.offers[0] : root.offers;
+            const currency = (offer.priceCurrency || offer.priceSpecification?.priceCurrency || 'TRY').toUpperCase();
+            const priceValue = offer.price || offer.priceSpecification?.price || offer.lowPrice;
+            if (priceValue !== undefined && priceValue !== null) {
+              const raw = String(priceValue);
+              const normalized = raw.replace(/,/g, '.');
+              const parsedNumber = parseFloat(normalized);
+              const parsed = !isNaN(parsedNumber) && parsedNumber > 0
+                ? parsedNumber
+                : parsePrice(raw)?.price;
+              if (parsed && parsed > 0) {
+                candidates.push({
+                  price: parsed,
+                  currency,
+                  method: 'site-specific',
+                  context: 'Trendyol JSON-LD offer',
+                  confidence: 0.97,
+                });
+
+                if (offer.availability) {
+                  const avail = String(offer.availability).toLowerCase();
+                  if (avail.includes('instock') || avail.includes('in_stock')) {
+                    stockStatus = 'in_stock';
+                  } else if (avail.includes('outofstock') || avail.includes('out_of_stock') || avail.includes('soldout')) {
+                    stockStatus = 'out_of_stock';
+                  }
+                }
+
+                break;
+              }
+            }
+          }
+        }
+
+        if (candidates.length > 0) break;
+      }
+    } catch {
+      // ignore JSON-LD parse errors
+    }
+
+    if (candidates.length > 0) {
+      return { candidates, name, imageUrl, stockStatus };
+    }
+
     const priceText = $('.prc-slg').first().text();
     if (priceText) {
       const parsed = parsePrice(priceText);
@@ -1467,11 +1581,13 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
       if (siteResult.stockStatus) result.stockStatus = siteResult.stockStatus;
     }
 
+    const looksLikeGateTitle = isPlaceholderProductName(result.name);
+
     // Try JSON-LD structured data
-    if (!result.price || !result.name || result.stockStatus === 'unknown') {
+    if (!result.price || !result.name || looksLikeGateTitle || result.stockStatus === 'unknown') {
       const jsonLdData = extractJsonLd($);
       if (jsonLdData) {
-        if (!result.name && jsonLdData.name) result.name = jsonLdData.name;
+        if ((!result.name || looksLikeGateTitle) && jsonLdData.name) result.name = jsonLdData.name;
         if (!result.price && jsonLdData.price) result.price = jsonLdData.price;
         if (!result.imageUrl && jsonLdData.image) result.imageUrl = jsonLdData.image;
         if (result.stockStatus === 'unknown' && jsonLdData.stockStatus) {
@@ -1481,7 +1597,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
     }
 
     // Fallback to generic scraping
-    if (!result.name) {
+    if (!result.name || isPlaceholderProductName(result.name)) {
       result.name = extractGenericName($);
     }
 
@@ -1499,7 +1615,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
     }
 
     // Try Open Graph meta tags as last resort
-    if (!result.name) {
+    if (!result.name || isPlaceholderProductName(result.name)) {
       result.name = $('meta[property="og:title"]').attr('content') || null;
     }
     if (!result.imageUrl) {
@@ -1530,7 +1646,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         const siteScraper = siteScrapers.find((s) => s.match(url));
         if (siteScraper) {
           const siteResult = siteScraper.scrape($browser, url);
-          if (!result.name && siteResult.name) result.name = siteResult.name;
+          if ((!result.name || isPlaceholderProductName(result.name)) && siteResult.name) result.name = siteResult.name;
           if (!result.price && siteResult.price) result.price = siteResult.price;
           if (!result.imageUrl && siteResult.imageUrl) result.imageUrl = siteResult.imageUrl;
           if (result.stockStatus === 'unknown' && siteResult.stockStatus) {
@@ -1542,7 +1658,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         if (!result.price) {
           const jsonLdData = extractJsonLd($browser);
           if (jsonLdData) {
-            if (!result.name && jsonLdData.name) result.name = jsonLdData.name;
+            if ((!result.name || isPlaceholderProductName(result.name)) && jsonLdData.name) result.name = jsonLdData.name;
             if (!result.price && jsonLdData.price) result.price = jsonLdData.price;
             if (!result.imageUrl && jsonLdData.image) result.imageUrl = jsonLdData.image;
             if (result.stockStatus === 'unknown' && jsonLdData.stockStatus) {
@@ -1555,7 +1671,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         if (!result.price) {
           result.price = extractGenericPrice($browser);
         }
-        if (!result.name) {
+        if (!result.name || isPlaceholderProductName(result.name)) {
           result.name = extractGenericName($browser);
         }
         if (!result.imageUrl) {
@@ -1621,7 +1737,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         if (aiResult && aiResult.price && aiResult.confidence > 0.5) {
           console.log(`[AI] Successfully extracted price for ${url}: ${aiResult.price.price} (confidence: ${aiResult.confidence})`);
           result.price = aiResult.price;
-          if (!result.name && aiResult.name) result.name = aiResult.name;
+          if ((!result.name || isPlaceholderProductName(result.name)) && aiResult.name) result.name = aiResult.name;
           if (!result.imageUrl && aiResult.imageUrl) result.imageUrl = aiResult.imageUrl;
           if (result.stockStatus === 'unknown' && aiResult.stockStatus !== 'unknown') {
             result.stockStatus = aiResult.stockStatus;
@@ -1780,7 +1896,7 @@ export async function scrapeProductWithVoting(
         allCandidates.push(...extractJsonLdCandidates($));
         const browserSiteResult = extractSiteSpecificCandidates($, url);
         allCandidates.push(...browserSiteResult.candidates);
-        if (!result.name && browserSiteResult.name) result.name = browserSiteResult.name;
+        if ((!result.name || isPlaceholderProductName(result.name)) && browserSiteResult.name) result.name = browserSiteResult.name;
         if (!result.imageUrl && browserSiteResult.imageUrl) result.imageUrl = browserSiteResult.imageUrl;
         if (result.stockStatus === 'unknown' && browserSiteResult.stockStatus !== 'unknown') {
           result.stockStatus = browserSiteResult.stockStatus;
@@ -1793,7 +1909,7 @@ export async function scrapeProductWithVoting(
     }
 
     // Fill in missing metadata
-    if (!result.name) {
+    if (!result.name || isPlaceholderProductName(result.name)) {
       result.name = extractGenericName($) || $('meta[property="og:title"]').attr('content') || null;
     }
     if (!result.imageUrl) {
@@ -1982,7 +2098,7 @@ export async function scrapeProductWithVoting(
               context: 'AI extraction (no other methods found price)',
               confidence: aiResult.confidence,
             });
-            if (!result.name && aiResult.name) result.name = aiResult.name;
+            if ((!result.name || isPlaceholderProductName(result.name)) && aiResult.name) result.name = aiResult.name;
             if (!result.imageUrl && aiResult.imageUrl) result.imageUrl = aiResult.imageUrl;
             if (result.stockStatus === 'unknown' && aiResult.stockStatus !== 'unknown') {
               result.stockStatus = aiResult.stockStatus;
@@ -2074,6 +2190,7 @@ interface JsonLdOffer {
   price?: string | number;
   priceCurrency?: string;
   lowPrice?: string | number;
+  highPrice?: string | number;
   priceSpecification?: JsonLdPriceSpecification;
   availability?: string;
 }
@@ -2102,18 +2219,31 @@ function extractJsonLd(
             ? product.offers[0]
             : product.offers;
 
-          // Get price, checking multiple locations:
-          // 1. lowPrice (for price ranges)
-          // 2. price (direct)
-          // 3. priceSpecification.price (nested format used by some sites)
-          const priceValue = offer.lowPrice || offer.price || offer.priceSpecification?.price;
+          // Prefer direct offer price over lowPrice (lowPrice can come from variants)
           const currency = offer.priceCurrency || offer.priceSpecification?.priceCurrency || 'USD';
+          const priceCandidates: Array<string | number | undefined> = [
+            offer.price,
+            offer.priceSpecification?.price,
+            offer.lowPrice,
+          ];
 
-          if (priceValue) {
-            result.price = {
-              price: parseFloat(String(priceValue)),
-              currency,
-            };
+          for (const priceValue of priceCandidates) {
+            if (priceValue === undefined || priceValue === null) continue;
+
+            const raw = String(priceValue);
+            const normalized = raw.replace(/,/g, '.');
+            const parsedNumber = parseFloat(normalized);
+            const parsed = !isNaN(parsedNumber) && parsedNumber > 0
+              ? parsedNumber
+              : parsePrice(raw)?.price;
+
+            if (parsed && parsed > 0) {
+              result.price = {
+                price: parsed,
+                currency,
+              };
+              break;
+            }
           }
 
           // Extract stock status from availability

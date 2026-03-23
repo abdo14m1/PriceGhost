@@ -20,16 +20,22 @@ const currencyMap: Record<string, string> = {
   '₺': 'TRY',
   'TRY': 'TRY',
   'TL': 'TRY',
+  'SAR': 'SAR',
+  'AED': 'AED',
+  'QAR': 'QAR',
+  'KWD': 'KWD',
+  'OMR': 'OMR',
+  'BHD': 'BHD',
 };
 
 // Patterns to match prices in text
 const pricePatterns = [
   // $29.99 or $29,99 or $ 29.99 or ₺12.345,67
   /(?<currency>[$€£¥₹₺])\s*(?<price>[\d.,]+)/,
-  // CHF 29.99 or Fr. 29.99 (Swiss franc prefix) or TRY 12.345,67
-  /(?<currency>CHF|Fr\.|TRY)\s*(?<price>[\d.,]+)/i,
-  // 29.99 USD or 29,99 EUR or 29.99 CHF or 12.34 TL
-  /(?<price>[\d.,]+)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF|TRY|TL)/i,
+  // CHF 29.99 or Fr. 29.99 (Swiss franc prefix) or SAR 99.52
+  /(?<currency>CHF|Fr\.|TRY|SAR|AED|QAR|KWD|OMR|BHD)\s*(?<price>[\d.,]+)/i,
+  // 29.99 USD or 29,99 EUR or 12.34 TL or 99.52 SAR
+  /(?<price>[\d.,]+)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF|TRY|TL|SAR|AED|QAR|KWD|OMR|BHD)/i,
   // Plain number with optional decimal (fallback)
   /(?<price>\d{1,3}(?:[,.\s]?\d{3})*(?:[.,]\d{2})?)/,
 ];
@@ -135,7 +141,7 @@ export function extractPricesFromText(html: string): ParsedPrice[] {
 
   // Match all price-like patterns in the HTML
   const allMatches = html.matchAll(
-    /(?:[$€£¥₹₺])\s*[\d.,]+|(?:CHF|Fr\.)\s*[\d.,]+|[\d.,]+\s*(?:USD|EUR|GBP|CAD|AUD|CHF|TRY|TL)/gi
+    /(?:[$€£¥₹₺])\s*[\d.,]+|(?:CHF|Fr\.|TRY|SAR|AED|QAR|KWD|OMR|BHD)\s*[\d.,]+|[\d.,]+\s*(?:USD|EUR|GBP|CAD|AUD|CHF|TRY|TL|SAR|AED|QAR|KWD|OMR|BHD)/gi
   );
 
   for (const match of allMatches) {

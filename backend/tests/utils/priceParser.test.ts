@@ -20,4 +20,19 @@ describe('priceParser', () => {
     const result = parsePrice('$1,234.56');
     expect(result).toEqual({ price: 1234.56, currency: 'USD' });
   });
+
+  it('parses SAR suffix', () => {
+    const result = parsePrice('99.52 SAR');
+    expect(result).toEqual({ price: 99.52, currency: 'SAR' });
+  });
+
+  it('parses SAR prefix', () => {
+    const result = parsePrice('SAR 99.52');
+    expect(result).toEqual({ price: 99.52, currency: 'SAR' });
+  });
+
+  it('parses AED prices', () => {
+    const result = parsePrice('90.87 AED');
+    expect(result).toEqual({ price: 90.87, currency: 'AED' });
+  });
 });
