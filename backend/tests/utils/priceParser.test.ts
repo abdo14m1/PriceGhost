@@ -35,4 +35,9 @@ describe('priceParser', () => {
     const result = parsePrice('90.87 AED');
     expect(result).toEqual({ price: 90.87, currency: 'AED' });
   });
+
+  it('parses EGP prices', () => {
+    const result = parsePrice('EGP 853.39');
+    expect(result).toEqual({ price: 853.39, currency: 'EGP' });
+  });
 });

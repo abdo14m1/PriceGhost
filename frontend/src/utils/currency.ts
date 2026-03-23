@@ -10,6 +10,7 @@ const currencySymbols: Record<string, string> = {
   KWD: 'KWD ',
   OMR: 'OMR ',
   BHD: 'BHD ',
+  EGP: 'EGP ',
   JPY: '¥',
   CAD: 'C$',
   AUD: 'A$',

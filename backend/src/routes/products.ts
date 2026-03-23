@@ -77,6 +77,13 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     let { url } = req.body;
     const siteContext = sanitizeSiteContext(req.body.siteContext);
 
+    const normalizeCurrency = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null;
+      const normalized = value.trim().toUpperCase();
+      if (!normalized) return null;
+      return normalized === 'TL' ? 'TRY' : normalized;
+    };
+
     if (!url) {
       res.status(400).json({ error: 'URL is required' });
       return;
@@ -144,9 +151,9 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       await priceHistoryQueries.create(
         product.id,
         selectedPrice,
-        typeof selectedCurrency === 'string' && selectedCurrency.trim()
-          ? selectedCurrency.trim().toUpperCase()
-          : (scrapedData.price?.currency || 'USD'),
+        normalizeCurrency(selectedCurrency)
+          || normalizeCurrency(scrapedData.price?.currency)
+          || 'USD',
         null
       );
 

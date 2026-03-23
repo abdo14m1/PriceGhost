@@ -292,14 +292,14 @@ function extractGenericCssCandidates($: CheerioAPI): PriceCandidate[] {
           const textSources = [text, $el.parent().text(), $el.closest('.price-box').text()];
           for (const source of textSources) {
             if (!source) continue;
-            const currencyCodeMatch = source.match(/\b(CHF|EUR|GBP|USD|CAD|AUD|JPY|INR)\b/i);
+            const currencyCodeMatch = source.match(/\b(CHF|EUR|GBP|USD|CAD|AUD|JPY|INR|TRY|SAR|AED|QAR|KWD|OMR|BHD|EGP)\b/i);
             if (currencyCodeMatch) {
               currency = currencyCodeMatch[1].toUpperCase();
               break;
             }
-            const symbolMatch = source.match(/([$€£¥₹])/);
+            const symbolMatch = source.match(/([$€£¥₹₺])/);
             if (symbolMatch) {
-              const symbolMap: Record<string, string> = { '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR' };
+              const symbolMap: Record<string, string> = { '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', '₺': 'TRY' };
               currency = symbolMap[symbolMatch[1]] || 'USD';
               break;
             }
@@ -349,6 +349,103 @@ function isLikelyRegionalGate(html: string, finalUrl: string): boolean {
 function isPlaceholderProductName(name: string | null): boolean {
   if (!name) return false;
   return /trendyol:\s*shop from essentials to extras/i.test(name.trim());
+}
+
+const SUPPORTED_CURRENCY_CODES = new Set([
+  'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'INR',
+  'CHF', 'TRY', 'SAR', 'AED', 'QAR', 'KWD', 'OMR', 'BHD', 'EGP',
+]);
+
+function inferCurrencyFromContext(context?: string): string | null {
+  if (!context) return null;
+  const codeMatch = context.match(/\b(USD|EUR|GBP|CAD|AUD|JPY|INR|CHF|TRY|TL|SAR|AED|QAR|KWD|OMR|BHD|EGP)\b/i);
+  if (codeMatch?.[1]) {
+    const upper = codeMatch[1].toUpperCase();
+    return upper === 'TL' ? 'TRY' : upper;
+  }
+
+  const symbolMatch = context.match(/[$€£¥₹₺]/);
+  if (!symbolMatch?.[0]) return null;
+  if (symbolMatch[0] === '€') return 'EUR';
+  if (symbolMatch[0] === '£') return 'GBP';
+  if (symbolMatch[0] === '¥') return 'JPY';
+  if (symbolMatch[0] === '₹') return 'INR';
+  if (symbolMatch[0] === '₺') return 'TRY';
+  return 'USD';
+}
+
+function normalizeCandidateCurrencies(candidates: PriceCandidate[]): PriceCandidate[] {
+  return candidates.map((candidate) => {
+    if (SUPPORTED_CURRENCY_CODES.has(candidate.currency)) {
+      return candidate;
+    }
+
+    const inferred = inferCurrencyFromContext(candidate.context);
+    if (!inferred) return candidate;
+
+    return {
+      ...candidate,
+      currency: inferred,
+    };
+  });
+}
+
+function getCandidateCurrencyCode(candidate: PriceCandidate): string | null {
+  if (SUPPORTED_CURRENCY_CODES.has(candidate.currency)) {
+    return candidate.currency;
+  }
+  return inferCurrencyFromContext(candidate.context);
+}
+
+function getCurrencyCounts(candidates: PriceCandidate[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const candidate of candidates) {
+    const code = getCandidateCurrencyCode(candidate);
+    if (!code || !SUPPORTED_CURRENCY_CODES.has(code)) continue;
+    counts.set(code, (counts.get(code) || 0) + 1);
+  }
+  return counts;
+}
+
+function inferMostLikelyCurrency(candidates: PriceCandidate[]): string | null {
+  const counts = getCurrencyCounts(candidates);
+
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [code, count] of counts.entries()) {
+    if (count > bestCount) {
+      best = code;
+      bestCount = count;
+    }
+  }
+
+  return best;
+}
+
+function shouldOverrideCurrency(
+  currentCurrency: string,
+  inferredCurrency: string,
+  candidates: PriceCandidate[]
+): boolean {
+  if (currentCurrency === inferredCurrency) return false;
+
+  const current = currentCurrency.toUpperCase();
+  const inferred = inferredCurrency.toUpperCase();
+
+  if (!SUPPORTED_CURRENCY_CODES.has(current)) return true;
+  if (current !== 'USD' || inferred === 'USD') return false;
+
+  const counts = getCurrencyCounts(candidates);
+  const inferredCount = counts.get(inferred) || 0;
+  const currentCount = counts.get(current) || 0;
+
+  return inferredCount >= 2 && inferredCount > currentCount;
+}
+
+function getDomainDefaultCurrency(url: string): string | null {
+  const hostname = new URL(url).hostname.toLowerCase();
+  if (hostname.endsWith('amazon.eg')) return 'EGP';
+  return null;
 }
 
 function parseTrendyolCountrySelectionFromStreamPayload(payload: string): RegionalGateOption[] {
@@ -715,7 +812,7 @@ const siteScrapers: SiteScraper[] = [
   },
   // Amazon
   {
-    match: (url) => /amazon\.(com|co\.uk|ca|de|fr|es|it|co\.jp|in|com\.au)/i.test(url),
+    match: (url) => /amazon\.(com|co\.uk|ca|de|fr|es|it|co\.jp|in|com\.au|eg)/i.test(url),
     scrape: ($) => {
       // Helper to check if element is inside a coupon/savings container
       const isInCouponContainer = (el: ReturnType<typeof $>) => {
@@ -1614,6 +1711,14 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
       result.stockStatus = extractGenericStockStatus($);
     }
 
+    const domainDefaultCurrency = getDomainDefaultCurrency(url);
+    if (domainDefaultCurrency && result.price) {
+      result.price = {
+        ...result.price,
+        currency: domainDefaultCurrency,
+      };
+    }
+
     // Try Open Graph meta tags as last resort
     if (!result.name || isPlaceholderProductName(result.name)) {
       result.name = $('meta[property="og:title"]').attr('content') || null;
@@ -1682,6 +1787,25 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         }
 
         if (result.price) {
+          const browserCandidates = normalizeCandidateCurrencies(extractGenericCssCandidates($browser));
+          const inferredCurrency = inferMostLikelyCurrency(browserCandidates);
+          if (
+            inferredCurrency &&
+            shouldOverrideCurrency(result.price.currency, inferredCurrency, browserCandidates)
+          ) {
+            result.price = {
+              ...result.price,
+              currency: inferredCurrency,
+            };
+          }
+
+          const browserDomainDefaultCurrency = getDomainDefaultCurrency(url);
+          if (browserDomainDefaultCurrency) {
+            result.price = {
+              ...result.price,
+              currency: browserDomainDefaultCurrency,
+            };
+          }
           console.log(`[Scraper] Successfully extracted price ${result.price.price} ${result.price.currency} using headless browser`);
         }
       } catch (browserError) {
@@ -1918,6 +2042,31 @@ export async function scrapeProductWithVoting(
     if (result.stockStatus === 'unknown') {
       result.stockStatus = extractGenericStockStatus($);
     }
+
+    const domainDefaultCurrency = getDomainDefaultCurrency(url);
+    if (domainDefaultCurrency && result.price) {
+      result.price = {
+        ...result.price,
+        currency: domainDefaultCurrency,
+      };
+    }
+
+    const normalizedCandidates = normalizeCandidateCurrencies(allCandidates);
+
+    if (result.price) {
+      const inferredCurrency = inferMostLikelyCurrency(normalizedCandidates);
+      if (
+        inferredCurrency &&
+        shouldOverrideCurrency(result.price.currency, inferredCurrency, normalizedCandidates)
+      ) {
+        result.price = {
+          ...result.price,
+          currency: inferredCurrency,
+        };
+      }
+    }
+
+    allCandidates.splice(0, allCandidates.length, ...normalizedCandidates);
 
     // Store all candidates
     result.priceCandidates = allCandidates;
@@ -2341,15 +2490,15 @@ function extractGenericPrice($: CheerioAPI): ParsedPrice | null {
           for (const source of textSources) {
             if (!source) continue;
             // Look for known currency codes first (more specific)
-            const currencyCodeMatch = source.match(/\b(CHF|EUR|GBP|USD|CAD|AUD|JPY|INR)\b/i);
+            const currencyCodeMatch = source.match(/\b(CHF|EUR|GBP|USD|CAD|AUD|JPY|INR|TRY|SAR|AED|QAR|KWD|OMR|BHD|EGP)\b/i);
             if (currencyCodeMatch) {
               currency = currencyCodeMatch[1].toUpperCase();
               break;
             }
             // Then try currency symbols
-            const symbolMatch = source.match(/([$€£¥₹])/);
+            const symbolMatch = source.match(/([$€£¥₹₺])/);
             if (symbolMatch) {
-              const symbolMap: Record<string, string> = { '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR' };
+              const symbolMap: Record<string, string> = { '$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', '₺': 'TRY' };
               currency = symbolMap[symbolMatch[1]] || 'USD';
               break;
             }

@@ -26,6 +26,7 @@ const currencyMap: Record<string, string> = {
   'KWD': 'KWD',
   'OMR': 'OMR',
   'BHD': 'BHD',
+  'EGP': 'EGP',
 };
 
 // Patterns to match prices in text
@@ -33,9 +34,9 @@ const pricePatterns = [
   // $29.99 or $29,99 or $ 29.99 or ₺12.345,67
   /(?<currency>[$€£¥₹₺])\s*(?<price>[\d.,]+)/,
   // CHF 29.99 or Fr. 29.99 (Swiss franc prefix) or SAR 99.52
-  /(?<currency>CHF|Fr\.|TRY|SAR|AED|QAR|KWD|OMR|BHD)\s*(?<price>[\d.,]+)/i,
+  /(?<currency>CHF|Fr\.|TRY|SAR|AED|QAR|KWD|OMR|BHD|EGP)\s*(?<price>[\d.,]+)/i,
   // 29.99 USD or 29,99 EUR or 12.34 TL or 99.52 SAR
-  /(?<price>[\d.,]+)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF|TRY|TL|SAR|AED|QAR|KWD|OMR|BHD)/i,
+  /(?<price>[\d.,]+)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF|TRY|TL|SAR|AED|QAR|KWD|OMR|BHD|EGP)/i,
   // Plain number with optional decimal (fallback)
   /(?<price>\d{1,3}(?:[,.\s]?\d{3})*(?:[.,]\d{2})?)/,
 ];
@@ -141,7 +142,7 @@ export function extractPricesFromText(html: string): ParsedPrice[] {
 
   // Match all price-like patterns in the HTML
   const allMatches = html.matchAll(
-    /(?:[$€£¥₹₺])\s*[\d.,]+|(?:CHF|Fr\.|TRY|SAR|AED|QAR|KWD|OMR|BHD)\s*[\d.,]+|[\d.,]+\s*(?:USD|EUR|GBP|CAD|AUD|CHF|TRY|TL|SAR|AED|QAR|KWD|OMR|BHD)/gi
+    /(?:[$€£¥₹₺])\s*[\d.,]+|(?:CHF|Fr\.|TRY|SAR|AED|QAR|KWD|OMR|BHD|EGP)\s*[\d.,]+|[\d.,]+\s*(?:USD|EUR|GBP|CAD|AUD|CHF|TRY|TL|SAR|AED|QAR|KWD|OMR|BHD|EGP)/gi
   );
 
   for (const match of allMatches) {
