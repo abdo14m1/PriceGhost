@@ -1,6 +1,11 @@
 import { Router, Response } from 'express';
 import { AuthRequest, authMiddleware } from '../middleware/auth';
 import { userQueries } from '../models';
+import {
+  getAIQuotaWarningFromError,
+  getAIQuotaWarningFromThrown,
+  toAIQuotaErrorResponse,
+} from '../utils/aiWarnings';
 
 const router = Router();
 
@@ -405,6 +410,8 @@ router.put('/ai', async (req: AuthRequest, res: Response) => {
 
 // Test AI extraction
 router.post('/ai/test', async (req: AuthRequest, res: Response) => {
+  let activeProvider: string | null = null;
+
   try {
     const userId = req.userId!;
     const { url } = req.body;
@@ -420,6 +427,8 @@ router.post('/ai/test', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    activeProvider = settings.ai_provider;
+
     console.log(`[AI Test] Testing URL: ${url} with provider: ${settings.ai_provider}`);
 
     const { extractWithAI } = await import('../services/ai-extractor');
@@ -432,6 +441,18 @@ router.post('/ai/test', async (req: AuthRequest, res: Response) => {
       ...result,
     });
   } catch (error) {
+    const thrownWarning = getAIQuotaWarningFromThrown(error);
+    if (thrownWarning) {
+      res.status(429).json(toAIQuotaErrorResponse(thrownWarning));
+      return;
+    }
+
+    const quotaWarning = getAIQuotaWarningFromError(error, 'settings_ai_test', activeProvider);
+    if (quotaWarning) {
+      res.status(429).json(toAIQuotaErrorResponse(quotaWarning));
+      return;
+    }
+
     console.error('Error testing AI extraction:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: `Failed to test AI extraction: ${errorMessage}` });

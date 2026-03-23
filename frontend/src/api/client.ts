@@ -138,6 +138,31 @@ export interface StorefrontSelectionResponse {
   regionalGate: RegionalGateInfo;
 }
 
+export interface AIQuotaErrorResponse {
+  error: string;
+  code: 'AI_QUOTA_EXHAUSTED';
+  provider: 'gemini';
+  context: 'product_extraction' | 'settings_ai_test';
+  title: string;
+  message: string;
+  cta: string;
+  retryAfterSeconds?: number;
+}
+
+export function isAIQuotaErrorResponse(data: unknown): data is AIQuotaErrorResponse {
+  if (!data || typeof data !== 'object') return false;
+
+  const payload = data as Partial<AIQuotaErrorResponse>;
+  return (
+    payload.code === 'AI_QUOTA_EXHAUSTED' &&
+    payload.provider === 'gemini' &&
+    (payload.context === 'product_extraction' || payload.context === 'settings_ai_test') &&
+    typeof payload.title === 'string' &&
+    typeof payload.message === 'string' &&
+    typeof payload.cta === 'string'
+  );
+}
+
 export type CreateProductResponse = Product | PriceReviewResponse | StorefrontSelectionResponse;
 
 export interface PriceHistory {

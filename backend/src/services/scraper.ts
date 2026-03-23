@@ -3,6 +3,12 @@ import { load, type CheerioAPI } from 'cheerio';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import {
+  AIServiceWarning,
+  getAIQuotaWarningFromError,
+  getAIQuotaWarningFromThrown,
+  mergeAIWarning,
+} from '../utils/aiWarnings';
+import {
   parsePrice,
   ParsedPrice,
   findMostLikelyPrice,
@@ -10,6 +16,21 @@ import {
 
 // Add stealth plugin to avoid bot detection (Cloudflare, etc.)
 puppeteer.use(StealthPlugin());
+
+function appendQuotaWarning(
+  warnings: AIServiceWarning[] | undefined,
+  error: unknown
+): AIServiceWarning[] {
+  const warning =
+    getAIQuotaWarningFromThrown(error)
+    || getAIQuotaWarningFromError(error, 'product_extraction', 'gemini');
+
+  if (!warning) {
+    return warnings || [];
+  }
+
+  return mergeAIWarning(warnings, warning);
+}
 
 export type StockStatus = 'in_stock' | 'out_of_stock' | 'unknown';
 
@@ -83,6 +104,7 @@ export interface ScrapedProductWithCandidates {
   priceCandidates: PriceCandidate[];
   needsReview: boolean;
   regionalGate: RegionalGateInfo | null;
+  warnings?: AIServiceWarning[];
   selectedMethod?: ExtractionMethod; // Which method was used for final price
 }
 
@@ -660,6 +682,7 @@ export interface ScrapedProduct {
   stockStatus: StockStatus;
   aiStatus: AIStatus;
   regionalGate: RegionalGateInfo | null;
+  warnings?: AIServiceWarning[];
 }
 
 // Site-specific scraper configurations
@@ -1640,6 +1663,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
     stockStatus: 'unknown',
     aiStatus: null,
     regionalGate: null,
+    warnings: [],
   };
 
   let html: string = '';
@@ -1880,6 +1904,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         }
       } catch (verifyError) {
         console.error(`[AI Verify] Verification failed for ${url}:`, verifyError);
+        result.warnings = appendQuotaWarning(result.warnings, verifyError);
       }
     }
 
@@ -1900,6 +1925,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         }
       } catch (aiError) {
         console.error(`[AI] Extraction failed for ${url}:`, aiError);
+        result.warnings = appendQuotaWarning(result.warnings, aiError);
       }
     }
   } catch (error) {
@@ -1937,6 +1963,7 @@ export async function scrapeProductWithVoting(
     priceCandidates: [],
     needsReview: false,
     regionalGate: null,
+    warnings: [],
   };
 
   let html: string = '';
@@ -2146,6 +2173,7 @@ export async function scrapeProductWithVoting(
             }
           } catch (stockError) {
             console.error(`[Voting] AI stock status verification failed:`, stockError);
+            result.warnings = appendQuotaWarning(result.warnings, stockError);
           }
         }
 
@@ -2179,6 +2207,7 @@ export async function scrapeProductWithVoting(
             }
           } catch (stockError) {
             console.error(`[Voting] AI stock status verification failed:`, stockError);
+            result.warnings = appendQuotaWarning(result.warnings, stockError);
           }
         }
 
@@ -2243,6 +2272,7 @@ export async function scrapeProductWithVoting(
           }
         } catch (aiError) {
           console.error(`[Voting] AI arbitration failed:`, aiError);
+          result.warnings = appendQuotaWarning(result.warnings, aiError);
           // Fall back to flagging for user review
           result.needsReview = true;
           const bestCandidate = allCandidates.sort((a, b) => b.confidence - a.confidence)[0];
@@ -2287,6 +2317,7 @@ export async function scrapeProductWithVoting(
           }
         } catch (aiError) {
           console.error(`[Voting] AI extraction failed:`, aiError);
+          result.warnings = appendQuotaWarning(result.warnings, aiError);
         }
       }
     }
@@ -2343,6 +2374,7 @@ export async function scrapeProductWithVoting(
         }
       } catch (verifyError) {
         console.error(`[Voting] AI verification failed:`, verifyError);
+        result.warnings = appendQuotaWarning(result.warnings, verifyError);
       }
     }
 
