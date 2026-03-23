@@ -362,6 +362,36 @@ function isLikelyRegionalGate(html: string, finalUrl: string): boolean {
     htmlLower.includes('m-country-selection');
 }
 
+function isLikelyBotBlockPage(html: string, url: string): boolean {
+  const hostname = new URL(url).hostname.toLowerCase();
+  if (!hostname.includes('amazon.')) return false;
+
+  const htmlLower = html.toLowerCase();
+  return htmlLower.includes('sorry, we just need to make sure you\'re not a robot') ||
+    htmlLower.includes('/errors/validatecaptcha') ||
+    htmlLower.includes('enter the characters you see below') ||
+    htmlLower.includes('automated access to amazon data files and pages') ||
+    htmlLower.includes('api-services-support@amazon.com');
+}
+
+function shouldFallbackToBrowser(axiosError: unknown, url: string): boolean {
+  if (!(axiosError instanceof AxiosError)) return false;
+
+  const status = axiosError.response?.status;
+  if (!status) return false;
+
+  if ([401, 403, 406, 412, 429, 451, 503].includes(status)) {
+    return true;
+  }
+
+  const hostname = new URL(url).hostname.toLowerCase();
+  if (hostname.includes('amazon.') && status >= 500) {
+    return true;
+  }
+
+  return false;
+}
+
 function isPlaceholderProductName(name: string | null): boolean {
   if (!name) return false;
   return /trendyol:\s*shop from essentials to extras/i.test(name.trim());
@@ -1672,18 +1702,26 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         maxRedirects: 5,
       });
       html = response.data;
-    } catch (axiosError) {
-      // If we get a 403 (Forbidden), try using a headless browser
-        if (axiosError instanceof AxiosError && axiosError.response?.status === 403) {
-          console.log(`HTTP request blocked (403) for ${url}, falling back to browser scraping...`);
-          const browserResult = await scrapeWithBrowser(url, siteContext);
-          html = browserResult.html;
-          lastBrowserResult = browserResult;
-          usedBrowser = true;
-        } else {
-          throw axiosError;
-        }
+
+      if (isLikelyBotBlockPage(html, url)) {
+        console.log(`Detected anti-bot page for ${url}, falling back to browser scraping...`);
+        const browserResult = await scrapeWithBrowser(url, siteContext);
+        html = browserResult.html;
+        lastBrowserResult = browserResult;
+        usedBrowser = true;
       }
+    } catch (axiosError) {
+      if (shouldFallbackToBrowser(axiosError, url)) {
+        const status = axiosError instanceof AxiosError ? axiosError.response?.status : undefined;
+        console.log(`HTTP request blocked (${status ?? 'unknown'}) for ${url}, falling back to browser scraping...`);
+        const browserResult = await scrapeWithBrowser(url, siteContext);
+        html = browserResult.html;
+        lastBrowserResult = browserResult;
+        usedBrowser = true;
+      } else {
+        throw axiosError;
+      }
+    }
 
     const $ = load(html);
 
@@ -1987,9 +2025,17 @@ export async function scrapeProductWithVoting(
         maxRedirects: 5,
       });
       html = response.data;
+
+      if (isLikelyBotBlockPage(html, url)) {
+        console.log(`[Voting] Detected anti-bot page for ${url}, using browser...`);
+        lastBrowserResult = await scrapeWithBrowser(url, siteContext);
+        html = lastBrowserResult.html;
+        usedBrowser = true;
+      }
       } catch (axiosError) {
-        if (axiosError instanceof AxiosError && axiosError.response?.status === 403) {
-          console.log(`[Voting] HTTP blocked (403) for ${url}, using browser...`);
+        if (shouldFallbackToBrowser(axiosError, url)) {
+          const status = axiosError instanceof AxiosError ? axiosError.response?.status : undefined;
+          console.log(`[Voting] HTTP blocked (${status ?? 'unknown'}) for ${url}, using browser...`);
           lastBrowserResult = await scrapeWithBrowser(url, siteContext);
           html = lastBrowserResult.html;
           usedBrowser = true;
