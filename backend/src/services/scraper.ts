@@ -574,6 +574,9 @@ export function parseRegionalGateOptionsFromPayload(domain: string, payloads: st
 
 // Browser-based scraping for sites that block HTTP requests (e.g., Cloudflare)
 async function scrapeWithBrowser(url: string, siteContext?: SiteContext): Promise<BrowserScrapeResult> {
+  const chromiumUserDataDir = process.env.CHROMIUM_USER_DATA_DIR || '/tmp/chrome-user-data';
+  const chromiumCrashDumpsDir = process.env.CHROMIUM_CRASH_DUMPS_DIR || '/tmp/chrome-crashpad';
+
   const browser = await puppeteer.launch({
     headless: true,
     args: [
@@ -583,6 +586,9 @@ async function scrapeWithBrowser(url: string, siteContext?: SiteContext): Promis
       '--disable-blink-features=AutomationControlled',
       '--disable-infobars',
       '--disable-crash-reporter',
+      '--disable-crashpad',
+      `--user-data-dir=${chromiumUserDataDir}`,
+      `--crash-dumps-dir=${chromiumCrashDumpsDir}`,
       '--window-size=1920,1080',
       '--start-maximized',
     ],
