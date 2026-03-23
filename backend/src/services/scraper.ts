@@ -332,7 +332,119 @@ interface SiteScraper {
   scrape: ($: CheerioAPI, url: string) => Partial<Omit<ScrapedProduct, 'url'>>;
 }
 
+// Exported for testing
+export function extractTrendyolCandidates(
+  $: CheerioAPI,
+  url: string
+): { candidates: PriceCandidate[]; name: string | null; imageUrl: string | null; stockStatus: StockStatus } {
+  const candidates: PriceCandidate[] = [];
+  let name: string | null = null;
+  let imageUrl: string | null = null;
+  let stockStatus: StockStatus = 'unknown';
+
+  const merchantIdMatch = url.match(/[?&]merchantId=(\d+)/);
+  const targetMerchantId = merchantIdMatch ? parseInt(merchantIdMatch[1], 10) : null;
+
+  try {
+    const scripts = $('script');
+    for (let i = 0; i < scripts.length; i++) {
+      const content = $(scripts[i]).html() || '';
+      // Look for window.__INITIAL_STATE__
+      if (content.includes('window.__INITIAL_STATE__')) {
+        try {
+          const jsonStr = content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1);
+          const state = JSON.parse(jsonStr);
+          const product = state?.product?.product;
+          
+          if (product) {
+            name = product.name || null;
+            imageUrl = product.images?.[0] || null;
+            
+            if (product.inStock === false || product.isSellable === false) {
+              stockStatus = 'out_of_stock';
+            } else if (product.inStock === true || product.isSellable === true) {
+              stockStatus = 'in_stock';
+            }
+
+            // Extract price
+            // Trendyol may have multiple sellers
+            let bestPriceInfo = product.price;
+
+            if (targetMerchantId) {
+              if (product.merchant?.id === targetMerchantId) {
+                bestPriceInfo = product.price;
+              } else if (product.otherMerchants) {
+                const targetMerchant = product.otherMerchants.find((m: any) => m.merchant?.id === targetMerchantId);
+                if (targetMerchant?.price) {
+                  bestPriceInfo = targetMerchant.price;
+                }
+              }
+            }
+
+            if (bestPriceInfo && bestPriceInfo.sellingPrice) {
+              const val = typeof bestPriceInfo.sellingPrice === 'object' ? bestPriceInfo.sellingPrice.value : bestPriceInfo.sellingPrice;
+              const cur = (typeof bestPriceInfo.sellingPrice === 'object' ? bestPriceInfo.sellingPrice.currency : bestPriceInfo.currency) || 'TRY';
+              
+              if (val) {
+                const parsedVal = typeof val === 'number' ? val : parsePrice(String(val))?.price;
+                if (parsedVal) {
+                  candidates.push({
+                    price: parsedVal,
+                    currency: cur,
+                    method: 'site-specific',
+                    context: 'Trendyol __INITIAL_STATE__',
+                    confidence: 0.95,
+                  });
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // ignore parse errors for this script tag
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore parse errors
+  }
+
+  // Fallback to HTML selectors
+  if (candidates.length === 0) {
+    const priceText = $('.prc-slg').first().text();
+    if (priceText) {
+      const parsed = parsePrice(priceText);
+      if (parsed) {
+        candidates.push({
+          price: parsed.price,
+          currency: parsed.currency || 'TRY',
+          method: 'site-specific',
+          context: 'Trendyol HTML selector',
+          confidence: 0.85,
+        });
+      }
+    }
+    if (!name) name = $('h1.pr-new-br span').text().trim() || null;
+    if (!imageUrl) imageUrl = $('.base-product-image img').attr('src') || null;
+  }
+
+  return { candidates, name, imageUrl, stockStatus };
+}
+
 const siteScrapers: SiteScraper[] = [
+  // Trendyol
+  {
+    match: (url) => /trendyol\.com/i.test(url),
+    scrape: ($, url) => {
+      const { candidates, name, imageUrl, stockStatus } = extractTrendyolCandidates($, url);
+      return {
+        name,
+        price: candidates[0] ? { price: candidates[0].price, currency: candidates[0].currency } : null,
+        imageUrl,
+        stockStatus,
+        allPrices: candidates.map(c => ({ price: c.price, currency: c.currency }))
+      };
+    },
+  },
   // Amazon
   {
     match: (url) => /amazon\.(com|co\.uk|ca|de|fr|es|it|co\.jp|in|com\.au)/i.test(url),
@@ -1386,6 +1498,7 @@ export async function scrapeProductWithVoting(
     /target\.com/i,
     /walmart\.com/i,
     /costco\.com/i,
+    /trendyol\.com/i,
   ];
   const requiresBrowser = jsHeavySites.some(pattern => pattern.test(url));
 

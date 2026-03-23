@@ -17,16 +17,19 @@ const currencyMap: Record<string, string> = {
   'USD': 'USD',
   'EUR': 'EUR',
   'GBP': 'GBP',
+  '₺': 'TRY',
+  'TRY': 'TRY',
+  'TL': 'TRY',
 };
 
 // Patterns to match prices in text
 const pricePatterns = [
-  // $29.99 or $29,99 or $ 29.99
-  /(?<currency>[$€£¥₹])\s*(?<price>[\d,]+\.?\d*)/,
-  // CHF 29.99 or Fr. 29.99 (Swiss franc prefix)
-  /(?<currency>CHF|Fr\.)\s*(?<price>[\d,]+\.?\d*)/i,
-  // 29.99 USD or 29,99 EUR or 29.99 CHF
-  /(?<price>[\d,]+\.?\d*)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF)/i,
+  // $29.99 or $29,99 or $ 29.99 or ₺12.345,67
+  /(?<currency>[$€£¥₹₺])\s*(?<price>[\d.,]+)/,
+  // CHF 29.99 or Fr. 29.99 (Swiss franc prefix) or TRY 12.345,67
+  /(?<currency>CHF|Fr\.|TRY)\s*(?<price>[\d.,]+)/i,
+  // 29.99 USD or 29,99 EUR or 29.99 CHF or 12.34 TL
+  /(?<price>[\d.,]+)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF|TRY|TL)/i,
   // Plain number with optional decimal (fallback)
   /(?<price>\d{1,3}(?:[,.\s]?\d{3})*(?:[.,]\d{2})?)/,
 ];
@@ -85,16 +88,41 @@ function normalizePrice(priceStr: string): number | null {
   // Remove spaces
   let normalized = priceStr.replace(/\s/g, '');
 
-  // Handle European format (1.234,56) vs US format (1,234.56)
-  const hasCommaDecimal = /,\d{2}$/.test(normalized);
-  const hasDotDecimal = /\.\d{2}$/.test(normalized);
+  // Strip trailing commas or periods that might have been matched
+  normalized = normalized.replace(/[,.]$/, '');
 
-  if (hasCommaDecimal && !hasDotDecimal) {
-    // European format: 1.234,56 -> 1234.56
-    normalized = normalized.replace(/\./g, '').replace(',', '.');
+  // Handle European format (1.234,56) vs US format (1,234.56)
+  // Also handle cases like 12.345,67 vs 12,345.67
+  const commaIndex = normalized.lastIndexOf(',');
+  const dotIndex = normalized.lastIndexOf('.');
+
+  if (commaIndex !== -1 && dotIndex !== -1) {
+    if (commaIndex > dotIndex) {
+      // Comma is the decimal separator: 1.234,56 -> 1234.56
+      normalized = normalized.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Dot is the decimal separator: 1,234.56 -> 1234.56
+      normalized = normalized.replace(/,/g, '');
+    }
   } else {
-    // US format or plain number: remove commas
-    normalized = normalized.replace(/,/g, '');
+    // No mixture. Just one type of separator or none.
+    if (commaIndex !== -1) {
+      // If we only have a comma, check if it's likely a decimal (e.g. 12,50) or thousand (e.g. 12,500)
+      if (normalized.length - commaIndex <= 3) {
+        // Assume decimal: 123,45 -> 123.45
+        normalized = normalized.replace(',', '.');
+      } else {
+        // Assume thousand: 12,345 -> 12345
+        normalized = normalized.replace(/,/g, '');
+      }
+    } else if (dotIndex !== -1) {
+      // If we only have a dot, check if it's likely a thousand separator (e.g. 1.000)
+      if (normalized.length - dotIndex > 3) {
+        // Assume thousand: 1.234 -> 1234
+        normalized = normalized.replace(/\./g, '');
+      }
+      // Else it's a decimal (e.g. 12.34), parseFloat handles it natively
+    }
   }
 
   const price = parseFloat(normalized);
@@ -107,7 +135,7 @@ export function extractPricesFromText(html: string): ParsedPrice[] {
 
   // Match all price-like patterns in the HTML
   const allMatches = html.matchAll(
-    /(?:[$€£¥₹])\s*[\d,]+\.?\d*|(?:CHF|Fr\.)\s*[\d,]+\.?\d*|[\d,]+\.?\d*\s*(?:USD|EUR|GBP|CAD|AUD|CHF)/gi
+    /(?:[$€£¥₹₺])\s*[\d.,]+|(?:CHF|Fr\.)\s*[\d.,]+|[\d.,]+\s*(?:USD|EUR|GBP|CAD|AUD|CHF|TRY|TL)/gi
   );
 
   for (const match of allMatches) {

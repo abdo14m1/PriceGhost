@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { AuthRequest, authMiddleware } from '../middleware/auth';
 import { productQueries, priceHistoryQueries, stockStatusHistoryQueries } from '../models';
 import { scrapeProduct, scrapeProductWithVoting, ExtractionMethod } from '../services/scraper';
+import { normalizeUrl } from '../utils/urlNormalizer';
 
 const router = Router();
 
@@ -24,12 +25,15 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 router.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const { url, refresh_interval, selectedPrice, selectedMethod } = req.body;
+    const { refresh_interval, selectedPrice, selectedMethod } = req.body;
+    let { url } = req.body;
 
     if (!url) {
       res.status(400).json({ error: 'URL is required' });
       return;
     }
+
+    url = normalizeUrl(url);
 
     // Validate URL
     try {
