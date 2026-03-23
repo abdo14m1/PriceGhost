@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { AuthRequest, authMiddleware } from '../middleware/auth';
 import { productQueries, priceHistoryQueries, stockStatusHistoryQueries } from '../models';
-import { scrapeProductWithVoting, ExtractionMethod } from '../services/scraper';
+import { scrapeProductWithVoting, ExtractionMethod, SiteContext } from '../services/scraper';
 
 const router = Router();
 
@@ -69,13 +69,15 @@ router.post('/:productId/refresh', async (req: AuthRequest, res: Response) => {
     const skipAiExtraction = await productQueries.isAiExtractionDisabled(productId);
 
     // Scrape product data with proper settings (same as scheduler)
+    const siteContext = (product.site_context || undefined) as SiteContext | undefined;
     const scrapedData = await scrapeProductWithVoting(
       product.url,
       userId,
       preferredMethod as ExtractionMethod | undefined,
       anchorPrice || undefined,
       skipAiVerification,
-      skipAiExtraction
+      skipAiExtraction,
+      siteContext
     );
 
     // Update stock status and record change if different

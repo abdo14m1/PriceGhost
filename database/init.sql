@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS products (
   url TEXT NOT NULL,
   name VARCHAR(255),
   image_url TEXT,
+  site_context JSONB,
   refresh_interval INTEGER DEFAULT 3600,
   last_checked TIMESTAMP,
   next_check_at TIMESTAMP,
@@ -82,6 +83,17 @@ BEGIN
     WHERE table_name = 'products' AND column_name = 'stock_status'
   ) THEN
     ALTER TABLE products ADD COLUMN stock_status VARCHAR(20) DEFAULT 'unknown';
+  END IF;
+END $$;
+
+-- Migration: Add site_context column to products if it doesn't exist
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'products' AND column_name = 'site_context'
+  ) THEN
+    ALTER TABLE products ADD COLUMN site_context JSONB;
   END IF;
 END $$;
 
@@ -131,3 +143,18 @@ CREATE TABLE IF NOT EXISTS price_history (
 -- Index for faster price history queries
 CREATE INDEX IF NOT EXISTS idx_price_history_product_date
 ON price_history(product_id, recorded_at);
+
+-- Cached regional gate configurations by site/domain
+CREATE TABLE IF NOT EXISTS site_gate_configs (
+  id SERIAL PRIMARY KEY,
+  domain VARCHAR(255) NOT NULL,
+  gate_key VARCHAR(255) NOT NULL,
+  site_name VARCHAR(255),
+  options JSONB NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(domain, gate_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_site_gate_configs_domain
+ON site_gate_configs(domain);

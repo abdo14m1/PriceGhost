@@ -360,6 +360,7 @@ export interface Product {
   url: string;
   name: string | null;
   image_url: string | null;
+  site_context: Record<string, unknown> | null;
   refresh_interval: number;
   last_checked: Date | null;
   next_check_at: Date | null;
@@ -510,18 +511,34 @@ export const productQueries = {
     name: string | null,
     imageUrl: string | null,
     refreshInterval: number = 3600,
-    stockStatus: StockStatus = 'unknown'
+    stockStatus: StockStatus = 'unknown',
+    siteContext: Record<string, unknown> | null = null
   ): Promise<Product> => {
     // Set initial next_check_at to a random time within the refresh interval
     // This spreads out new products so they don't all check at once
     const randomDelaySeconds = Math.floor(Math.random() * refreshInterval);
     const result = await pool.query(
-      `INSERT INTO products (user_id, url, name, image_url, refresh_interval, stock_status, next_check_at)
-       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP + ($7 || ' seconds')::interval)
+      `INSERT INTO products (user_id, url, name, image_url, site_context, refresh_interval, stock_status, next_check_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP + ($8 || ' seconds')::interval)
        RETURNING *`,
-      [userId, url, name, imageUrl, refreshInterval, stockStatus, randomDelaySeconds]
+      [userId, url, name, imageUrl, siteContext ? JSON.stringify(siteContext) : null, refreshInterval, stockStatus, randomDelaySeconds]
     );
     return result.rows[0];
+  },
+
+  updateSiteContext: async (
+    id: number,
+    userId: number,
+    siteContext: Record<string, unknown> | null
+  ): Promise<Product | null> => {
+    const result = await pool.query(
+      `UPDATE products
+       SET site_context = $1
+       WHERE id = $2 AND user_id = $3
+       RETURNING *`,
+      [siteContext ? JSON.stringify(siteContext) : null, id, userId]
+    );
+    return result.rows[0] || null;
   },
 
   update: async (
@@ -672,6 +689,46 @@ export const productQueries = {
       [paused, ids, userId]
     );
     return result.rowCount || 0;
+  },
+};
+
+export interface SiteGateConfig {
+  id: number;
+  domain: string;
+  gate_key: string;
+  site_name: string | null;
+  options: unknown[];
+  created_at: Date;
+  updated_at: Date;
+}
+
+export const siteGateConfigQueries = {
+  findByDomainAndGateKey: async (domain: string, gateKey: string): Promise<SiteGateConfig | null> => {
+    const result = await pool.query(
+      `SELECT * FROM site_gate_configs WHERE domain = $1 AND gate_key = $2 LIMIT 1`,
+      [domain, gateKey]
+    );
+    return result.rows[0] || null;
+  },
+
+  upsert: async (
+    domain: string,
+    gateKey: string,
+    options: unknown[],
+    siteName?: string
+  ): Promise<SiteGateConfig> => {
+    const result = await pool.query(
+      `INSERT INTO site_gate_configs (domain, gate_key, site_name, options, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, CURRENT_TIMESTAMP)
+       ON CONFLICT (domain, gate_key)
+       DO UPDATE SET
+         options = EXCLUDED.options,
+         site_name = COALESCE(EXCLUDED.site_name, site_gate_configs.site_name),
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [domain, gateKey, siteName || null, JSON.stringify(options)]
+    );
+    return result.rows[0];
   },
 };
 

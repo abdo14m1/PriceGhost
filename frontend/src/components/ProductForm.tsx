@@ -1,7 +1,7 @@
 import { useState, FormEvent } from 'react';
 
 interface ProductFormProps {
-  onSubmit: (url: string, refreshInterval: number) => Promise<void>;
+  onSubmit: (url: string, refreshInterval: number) => Promise<boolean | void>;
 }
 
 const REFRESH_INTERVALS = [
@@ -37,9 +37,11 @@ export default function ProductForm({ onSubmit }: ProductFormProps) {
     setIsLoading(true);
 
     try {
-      await onSubmit(url, refreshInterval);
-      setUrl('');
-      setRefreshInterval(3600);
+      const shouldReset = await onSubmit(url, refreshInterval);
+      if (shouldReset !== false) {
+        setUrl('');
+        setRefreshInterval(3600);
+      }
     } catch (err) {
       if (err instanceof Error) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

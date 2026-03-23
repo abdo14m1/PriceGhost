@@ -49,6 +49,7 @@ async function runMigrations() {
         url TEXT NOT NULL,
         name VARCHAR(255),
         image_url TEXT,
+        site_context JSONB,
         refresh_interval INTEGER DEFAULT 3600,
         last_checked TIMESTAMP,
         next_check_at TIMESTAMP,
@@ -210,7 +211,27 @@ async function runMigrations() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'products' AND column_name = 'checking_paused') THEN
           ALTER TABLE products ADD COLUMN checking_paused BOOLEAN DEFAULT false;
         END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'products' AND column_name = 'site_context') THEN
+          ALTER TABLE products ADD COLUMN site_context JSONB;
+        END IF;
       END $$;
+    `);
+
+    // Create cache table for regional gate options
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS site_gate_configs (
+        id SERIAL PRIMARY KEY,
+        domain VARCHAR(255) NOT NULL,
+        gate_key VARCHAR(255) NOT NULL,
+        site_name VARCHAR(255),
+        options JSONB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(domain, gate_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_site_gate_configs_domain
+      ON site_gate_configs(domain);
     `);
 
     // Create notification_history table for tracking all triggered notifications

@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { productQueries, priceHistoryQueries, userQueries, stockStatusHistoryQueries, notificationHistoryQueries, NotificationType } from '../models';
-import { scrapeProduct, scrapeProductWithVoting, ExtractionMethod } from './scraper';
+import { scrapeProduct, scrapeProductWithVoting, ExtractionMethod, SiteContext } from './scraper';
 import { sendNotifications, NotificationPayload } from './notifications';
 
 let isRunning = false;
@@ -38,14 +38,22 @@ async function checkPrices(): Promise<void> {
         console.log(`[Scheduler] Product ${product.id} - preferredMethod: ${preferredMethod}, anchorPrice: ${anchorPrice}, skipAiVerify: ${skipAiVerification}, skipAiExtract: ${skipAiExtraction}`);
 
         // Use voting scraper with preferred method and anchor price if available
+        const siteContext = (product.site_context || undefined) as SiteContext | undefined;
         const scrapedData = await scrapeProductWithVoting(
           product.url,
           product.user_id,
           preferredMethod as ExtractionMethod | undefined,
           anchorPrice || undefined,
           skipAiVerification,
-          skipAiExtraction
+          skipAiExtraction,
+          siteContext
         );
+
+        if (scrapedData.regionalGate) {
+          console.warn(`[Scheduler] Product ${product.id} hit a regional gate; skipping until storefront context is configured.`);
+          await productQueries.updateLastChecked(product.id, product.refresh_interval);
+          continue;
+        }
 
         console.log(`[Scheduler] Product ${product.id} - scraped price: ${scrapedData.price?.price}, candidates: ${scrapedData.priceCandidates.map(c => `${c.price}(${c.method})`).join(', ')}`);
 

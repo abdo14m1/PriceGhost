@@ -3,11 +3,29 @@ import Layout from '../components/Layout';
 import ProductCard from '../components/ProductCard';
 import ProductForm from '../components/ProductForm';
 import PriceSelectionModal from '../components/PriceSelectionModal';
-import { productsApi, pricesApi, Product, PriceReviewResponse } from '../api/client';
+import StorefrontSelectionModal from '../components/StorefrontSelectionModal';
+import {
+  productsApi,
+  pricesApi,
+  Product,
+  PriceReviewResponse,
+  StorefrontSelectionResponse,
+  RegionalGateInfo,
+  RegionalGateOption,
+  SiteContext,
+} from '../api/client';
 
 // Type guard to check if response needs review
-function isPriceReviewResponse(response: Product | PriceReviewResponse): response is PriceReviewResponse {
+function isPriceReviewResponse(
+  response: Product | PriceReviewResponse | StorefrontSelectionResponse
+): response is PriceReviewResponse {
   return 'needsReview' in response && response.needsReview === true;
+}
+
+function isStorefrontSelectionResponse(
+  response: Product | PriceReviewResponse | StorefrontSelectionResponse
+): response is StorefrontSelectionResponse {
+  return 'needsStorefrontSelection' in response && response.needsStorefrontSelection === true;
 }
 
 type SortOption = 'date_added' | 'name' | 'price' | 'price_change' | 'website';
@@ -44,6 +62,10 @@ export default function Dashboard() {
   const [showPriceModal, setShowPriceModal] = useState(false);
   const [priceReviewData, setPriceReviewData] = useState<PriceReviewResponse | null>(null);
   const [pendingRefreshInterval, setPendingRefreshInterval] = useState<number>(3600);
+  const [pendingAddUrl, setPendingAddUrl] = useState<string | null>(null);
+  const [showStorefrontModal, setShowStorefrontModal] = useState(false);
+  const [regionalGateData, setRegionalGateData] = useState<RegionalGateInfo | null>(null);
+  const [pendingSiteContext, setPendingSiteContext] = useState<SiteContext | undefined>(undefined);
 
   const fetchProducts = async () => {
     try {
@@ -71,16 +93,66 @@ export default function Dashboard() {
   const handleAddProduct = async (url: string, refreshInterval: number) => {
     const response = await productsApi.create(url, refreshInterval);
 
+    if (isStorefrontSelectionResponse(response.data)) {
+      setPendingAddUrl(url);
+      setPendingRefreshInterval(refreshInterval);
+      setRegionalGateData(response.data.regionalGate);
+      setShowStorefrontModal(true);
+      return false;
+    }
+
     // Check if we need user to select a price
     if (isPriceReviewResponse(response.data)) {
+      setPendingSiteContext(undefined);
       setPriceReviewData(response.data);
       setPendingRefreshInterval(refreshInterval);
       setShowPriceModal(true);
-      return; // Don't add product yet - wait for user selection
+      return false; // Don't add product yet - wait for user selection
     }
 
     // response.data is a Product at this point
     setProducts((prev) => [response.data as Product, ...prev]);
+    return true;
+  };
+
+  const handleStorefrontSelected = async (option: RegionalGateOption) => {
+    if (!pendingAddUrl) return;
+
+    const siteContext: SiteContext = option.context;
+
+    const response = await productsApi.create(
+      pendingAddUrl,
+      pendingRefreshInterval,
+      undefined,
+      undefined,
+      siteContext
+    );
+
+    if (isPriceReviewResponse(response.data)) {
+      setPendingSiteContext(siteContext);
+      setShowStorefrontModal(false);
+      setPriceReviewData(response.data);
+      setShowPriceModal(true);
+      return;
+    }
+
+    if (isStorefrontSelectionResponse(response.data)) {
+      setRegionalGateData(response.data.regionalGate);
+      return;
+    }
+
+    setProducts((prev) => [response.data as Product, ...prev]);
+    setShowStorefrontModal(false);
+    setRegionalGateData(null);
+    setPendingAddUrl(null);
+    setPendingSiteContext(undefined);
+  };
+
+  const handleStorefrontModalClose = () => {
+    setShowStorefrontModal(false);
+    setRegionalGateData(null);
+    setPendingAddUrl(null);
+    setPendingSiteContext(undefined);
   };
 
   const handlePriceSelected = async (selectedPrice: number, selectedMethod: string) => {
@@ -90,7 +162,8 @@ export default function Dashboard() {
       priceReviewData.url,
       pendingRefreshInterval,
       selectedPrice,
-      selectedMethod
+      selectedMethod,
+      pendingSiteContext
     );
 
     // When selecting a price, the API should always return a Product
@@ -99,11 +172,13 @@ export default function Dashboard() {
     }
     setShowPriceModal(false);
     setPriceReviewData(null);
+    setPendingSiteContext(undefined);
   };
 
   const handlePriceModalClose = () => {
     setShowPriceModal(false);
     setPriceReviewData(null);
+    setPendingSiteContext(undefined);
   };
 
   const handleDeleteProduct = async (id: number) => {
@@ -748,6 +823,13 @@ export default function Dashboard() {
       </div>
 
       <ProductForm onSubmit={handleAddProduct} />
+
+      <StorefrontSelectionModal
+        isOpen={showStorefrontModal}
+        regionalGate={regionalGateData}
+        onClose={handleStorefrontModalClose}
+        onSelect={handleStorefrontSelected}
+      />
 
       {/* Price Selection Modal */}
       <PriceSelectionModal

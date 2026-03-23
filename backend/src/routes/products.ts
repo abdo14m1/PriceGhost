@@ -1,10 +1,58 @@
 import { Router, Response } from 'express';
 import { AuthRequest, authMiddleware } from '../middleware/auth';
-import { productQueries, priceHistoryQueries, stockStatusHistoryQueries } from '../models';
-import { scrapeProduct, scrapeProductWithVoting, ExtractionMethod } from '../services/scraper';
+import { productQueries, priceHistoryQueries, siteGateConfigQueries, stockStatusHistoryQueries } from '../models';
+import {
+  buildRegionalGateInfo,
+  RegionalGateOption,
+  scrapeProduct,
+  scrapeProductWithVoting,
+  ExtractionMethod,
+  SiteContext,
+} from '../services/scraper';
 import { normalizeUrl } from '../utils/urlNormalizer';
 
 const router = Router();
+
+function sanitizeSiteContext(input: unknown): SiteContext | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Record<string, unknown>;
+
+  const context: SiteContext = {};
+  if (typeof raw.countryCode === 'string') context.countryCode = raw.countryCode;
+  if (typeof raw.storefrontId === 'string') context.storefrontId = raw.storefrontId;
+  if (typeof raw.language === 'string') context.language = raw.language;
+  if (Array.isArray(raw.cookies)) {
+    context.cookies = raw.cookies
+      .filter((cookie): cookie is Record<string, unknown> => !!cookie && typeof cookie === 'object')
+      .map((cookie) => ({
+        name: String(cookie.name || ''),
+        value: String(cookie.value || ''),
+        domain: cookie.domain ? String(cookie.domain) : undefined,
+        path: cookie.path ? String(cookie.path) : undefined,
+      }))
+      .filter((cookie) => cookie.name && cookie.value);
+  }
+
+  return context;
+}
+
+async function getCachedRegionalGate(url: string): Promise<ReturnType<typeof buildRegionalGateInfo> | null> {
+  const domain = new URL(url).hostname.replace(/^www\./, '');
+  const gateKey = 'country-selection';
+
+  const cached = await siteGateConfigQueries.findByDomainAndGateKey(domain, gateKey);
+  if (cached && Array.isArray(cached.options) && cached.options.length > 0) {
+    return {
+      domain,
+      gateKey,
+      siteName: cached.site_name || domain,
+      message: 'This site requires selecting a regional storefront to access accurate pricing.',
+      options: cached.options as RegionalGateOption[],
+    };
+  }
+
+  return null;
+}
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -27,6 +75,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     const userId = req.userId!;
     const { refresh_interval, selectedPrice, selectedMethod } = req.body;
     let { url } = req.body;
+    const siteContext = sanitizeSiteContext(req.body.siteContext);
 
     if (!url) {
       res.status(400).json({ error: 'URL is required' });
@@ -43,10 +92,35 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    if (!siteContext) {
+      const cachedGate = await getCachedRegionalGate(url);
+      if (cachedGate) {
+        res.status(200).json({
+          needsStorefrontSelection: true,
+          regionalGate: cachedGate,
+        });
+        return;
+      }
+    }
+
     // If user is confirming a price selection, use the old scraper with their choice
     if (selectedPrice !== undefined && selectedMethod) {
       // User has selected a price from candidates - use it directly
-      const scrapedData = await scrapeProduct(url, userId);
+      const scrapedData = await scrapeProduct(url, userId, siteContext);
+
+      if (scrapedData.regionalGate && !siteContext) {
+        await siteGateConfigQueries.upsert(
+          scrapedData.regionalGate.domain,
+          scrapedData.regionalGate.gateKey,
+          scrapedData.regionalGate.options,
+          scrapedData.regionalGate.siteName
+        );
+        res.status(200).json({
+          needsStorefrontSelection: true,
+          regionalGate: scrapedData.regionalGate,
+        });
+        return;
+      }
 
       // Create product with the user-selected price
       const product = await productQueries.create(
@@ -55,7 +129,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         scrapedData.name,
         scrapedData.imageUrl,
         refresh_interval || 3600,
-        scrapedData.stockStatus
+        scrapedData.stockStatus,
+        siteContext || null
       );
 
       // Store the preferred extraction method and the user-selected price
@@ -87,7 +162,21 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     }
 
     // Use multi-strategy voting scraper
-    const scrapedData = await scrapeProductWithVoting(url, userId);
+    const scrapedData = await scrapeProductWithVoting(url, userId, undefined, undefined, undefined, undefined, siteContext);
+
+    if (scrapedData.regionalGate && !siteContext) {
+      await siteGateConfigQueries.upsert(
+        scrapedData.regionalGate.domain,
+        scrapedData.regionalGate.gateKey,
+        scrapedData.regionalGate.options,
+        scrapedData.regionalGate.siteName
+      );
+      res.status(200).json({
+        needsStorefrontSelection: true,
+        regionalGate: scrapedData.regionalGate,
+      });
+      return;
+    }
 
     // Allow adding out-of-stock products, but require a price for in-stock ones
     if (!scrapedData.price && scrapedData.stockStatus !== 'out_of_stock') {
@@ -140,7 +229,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       scrapedData.name,
       scrapedData.imageUrl,
       refresh_interval || 3600,
-      scrapedData.stockStatus
+      scrapedData.stockStatus,
+      siteContext || null
     );
 
     // Store the extraction method that worked

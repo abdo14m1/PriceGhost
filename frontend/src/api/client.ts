@@ -105,7 +105,40 @@ export interface PriceReviewResponse {
   url: string;
 }
 
-export type CreateProductResponse = Product | PriceReviewResponse;
+export interface SiteContextCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+}
+
+export interface SiteContext {
+  countryCode?: string;
+  storefrontId?: string;
+  language?: string;
+  cookies?: SiteContextCookie[];
+}
+
+export interface RegionalGateOption {
+  id: string;
+  label: string;
+  context: SiteContext;
+}
+
+export interface RegionalGateInfo {
+  domain: string;
+  gateKey: string;
+  siteName: string;
+  message: string;
+  options: RegionalGateOption[];
+}
+
+export interface StorefrontSelectionResponse {
+  needsStorefrontSelection: true;
+  regionalGate: RegionalGateInfo;
+}
+
+export type CreateProductResponse = Product | PriceReviewResponse | StorefrontSelectionResponse;
 
 export interface PriceHistory {
   id: number;
@@ -120,12 +153,19 @@ export const productsApi = {
 
   getById: (id: number) => api.get<ProductWithStats>(`/products/${id}`),
 
-  create: (url: string, refreshInterval?: number, selectedPrice?: number, selectedMethod?: string) =>
+  create: (
+    url: string,
+    refreshInterval?: number,
+    selectedPrice?: number,
+    selectedMethod?: string,
+    siteContext?: SiteContext
+  ) =>
     api.post<CreateProductResponse>('/products', {
       url,
       refresh_interval: refreshInterval,
       selectedPrice,
       selectedMethod,
+      siteContext,
     }),
 
   update: (id: number, data: {

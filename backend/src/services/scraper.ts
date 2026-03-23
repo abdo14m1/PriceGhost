@@ -16,6 +16,53 @@ export type StockStatus = 'in_stock' | 'out_of_stock' | 'unknown';
 // Extraction method types for multi-strategy voting
 export type ExtractionMethod = 'json-ld' | 'site-specific' | 'generic-css' | 'ai';
 
+export interface SiteContextCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+}
+
+export interface SiteContext {
+  cookies?: SiteContextCookie[];
+  countryCode?: string;
+  storefrontId?: string;
+  language?: string;
+  [key: string]: unknown;
+}
+
+export interface RegionalGateOption {
+  id: string;
+  label: string;
+  context: SiteContext;
+}
+
+export interface RegionalGateInfo {
+  domain: string;
+  gateKey: string;
+  siteName: string;
+  message: string;
+  options: RegionalGateOption[];
+}
+
+export function buildRegionalGateInfo(url: string, options: RegionalGateOption[]): RegionalGateInfo {
+  const hostname = new URL(url).hostname.replace(/^www\./, '');
+  const siteName = hostname.includes('trendyol.com') ? 'Trendyol' : hostname;
+  return {
+    domain: hostname,
+    gateKey: 'country-selection',
+    siteName,
+    message: 'This site requires selecting a regional storefront to access accurate pricing.',
+    options,
+  };
+}
+
+interface BrowserScrapeResult {
+  html: string;
+  finalUrl: string;
+  gatePayloads: string[];
+}
+
 // Price candidate from a single extraction method
 export interface PriceCandidate {
   price: number;
@@ -35,6 +82,7 @@ export interface ScrapedProductWithCandidates {
   aiStatus: 'verified' | 'corrected' | null;
   priceCandidates: PriceCandidate[];
   needsReview: boolean;
+  regionalGate: RegionalGateInfo | null;
   selectedMethod?: ExtractionMethod; // Which method was used for final price
 }
 
@@ -246,8 +294,82 @@ function extractGenericCssCandidates($: CheerioAPI): PriceCandidate[] {
   return candidates;
 }
 
+function isLikelyRegionalGate(html: string, finalUrl: string): boolean {
+  const urlLower = finalUrl.toLowerCase();
+  if (urlLower.includes('/select-country')) return true;
+
+  const htmlLower = html.toLowerCase();
+  return htmlLower.includes('please select your country for shopping') ||
+    htmlLower.includes('welcome to trendyol') ||
+    htmlLower.includes('m-country-selection');
+}
+
+function parseTrendyolCountrySelectionFromStreamPayload(payload: string): RegionalGateOption[] {
+  try {
+    const parsed = JSON.parse(payload) as { main?: string };
+    const main = parsed.main || '';
+    const propsMatch = main.match(/window\["__m-country-selection__PROPS"\]=(\{[\s\S]*?\})<\/script>/);
+    if (!propsMatch?.[1]) return [];
+
+    const props = JSON.parse(propsMatch[1]) as {
+      config?: {
+        storefrontList?: Array<{
+          id?: string;
+          code?: string;
+          language?: string;
+          otherLanguages?: string[];
+          name?: string;
+        }>;
+      };
+    };
+
+    const storefrontList = props.config?.storefrontList || [];
+    const options: RegionalGateOption[] = [];
+
+    for (const storefront of storefrontList) {
+      const code = storefront.code;
+      const id = storefront.id;
+      const labelBase = storefront.name || code || id;
+      const lang = String(storefront.language || 'en').toLowerCase();
+      if (!code || !id || !labelBase) continue;
+
+      options.push({
+        id: `trendyol:${code}:${id}`,
+        label: labelBase,
+        context: {
+          countryCode: code,
+          storefrontId: id,
+          language: lang,
+          cookies: [
+            { name: 'countryCode', value: code, domain: '.trendyol.com', path: '/' },
+            { name: 'storefrontId', value: id, domain: '.trendyol.com', path: '/' },
+            { name: 'language', value: lang, domain: '.trendyol.com', path: '/' },
+          ],
+        },
+      });
+    }
+
+    return options;
+  } catch {
+    return [];
+  }
+}
+
+export function parseRegionalGateOptionsFromPayload(domain: string, payloads: string[]): RegionalGateOption[] {
+  const lowerDomain = domain.toLowerCase();
+
+  if (lowerDomain.includes('trendyol.com')) {
+    for (const payload of payloads) {
+      const parsed = parseTrendyolCountrySelectionFromStreamPayload(payload);
+      if (parsed.length > 0) return parsed;
+    }
+  }
+
+  return [];
+}
+
 // Browser-based scraping for sites that block HTTP requests (e.g., Cloudflare)
-async function scrapeWithBrowser(url: string): Promise<string> {
+async function scrapeWithBrowser(url: string, siteContext?: SiteContext): Promise<BrowserScrapeResult> {
   const browser = await puppeteer.launch({
     headless: true,
     args: [
@@ -266,9 +388,39 @@ async function scrapeWithBrowser(url: string): Promise<string> {
 
   try {
     const page = await browser.newPage();
+    const gatePayloads: string[] = [];
+
+    page.on('response', async (response) => {
+      const responseUrl = response.url();
+      if (
+        responseUrl.includes('/m-country-selection') &&
+        responseUrl.includes('__renderMode=stream')
+      ) {
+        try {
+          const text = await response.text();
+          if (text && text.includes('__m-country-selection__PROPS')) {
+            gatePayloads.push(text);
+          }
+        } catch {
+          // ignore stream parse errors
+        }
+      }
+    });
 
     // Set viewport
     await page.setViewport({ width: 1920, height: 1080 });
+
+    const cookiesToSet = siteContext?.cookies || [];
+    if (cookiesToSet.length > 0) {
+      await page.setCookie(
+        ...cookiesToSet.map((cookie) => ({
+          name: cookie.name,
+          value: cookie.value,
+          domain: cookie.domain || `.${new URL(url).hostname.replace(/^www\./, '')}`,
+          path: cookie.path || '/',
+        }))
+      );
+    }
 
     // Navigate to the page and wait for content to load
     await page.goto(url, {
@@ -309,7 +461,8 @@ async function scrapeWithBrowser(url: string): Promise<string> {
 
     // Get the full HTML content
     const html = await page.content();
-    return html;
+    const finalUrl = page.url();
+    return { html, finalUrl, gatePayloads };
   } finally {
     await browser.close();
   }
@@ -324,6 +477,7 @@ export interface ScrapedProduct {
   url: string;
   stockStatus: StockStatus;
   aiStatus: AIStatus;
+  regionalGate: RegionalGateInfo | null;
 }
 
 // Site-specific scraper configurations
@@ -1235,7 +1389,7 @@ const genericImageSelectors = [
   'img[class*="product"]',
 ];
 
-export async function scrapeProduct(url: string, userId?: number): Promise<ScrapedProduct> {
+export async function scrapeProduct(url: string, userId?: number, siteContext?: SiteContext): Promise<ScrapedProduct> {
   const result: ScrapedProduct = {
     name: null,
     price: null,
@@ -1243,9 +1397,11 @@ export async function scrapeProduct(url: string, userId?: number): Promise<Scrap
     url,
     stockStatus: 'unknown',
     aiStatus: null,
+    regionalGate: null,
   };
 
   let html: string = '';
+  let lastBrowserResult: BrowserScrapeResult | null = null;
 
   try {
     let usedBrowser = false;
@@ -1276,16 +1432,26 @@ export async function scrapeProduct(url: string, userId?: number): Promise<Scrap
       html = response.data;
     } catch (axiosError) {
       // If we get a 403 (Forbidden), try using a headless browser
-      if (axiosError instanceof AxiosError && axiosError.response?.status === 403) {
-        console.log(`HTTP request blocked (403) for ${url}, falling back to browser scraping...`);
-        html = await scrapeWithBrowser(url);
-        usedBrowser = true;
-      } else {
-        throw axiosError;
+        if (axiosError instanceof AxiosError && axiosError.response?.status === 403) {
+          console.log(`HTTP request blocked (403) for ${url}, falling back to browser scraping...`);
+          const browserResult = await scrapeWithBrowser(url, siteContext);
+          html = browserResult.html;
+          lastBrowserResult = browserResult;
+          usedBrowser = true;
+        } else {
+          throw axiosError;
+        }
       }
-    }
 
     const $ = load(html);
+
+    if (lastBrowserResult && isLikelyRegionalGate(lastBrowserResult.html, lastBrowserResult.finalUrl)) {
+      const gateOptions = parseRegionalGateOptionsFromPayload(url, lastBrowserResult.gatePayloads);
+      if (gateOptions.length > 0) {
+        result.regionalGate = buildRegionalGateInfo(url, gateOptions);
+        return result;
+      }
+    }
 
     if (usedBrowser) {
       console.log(`Successfully scraped ${url} using headless browser`);
@@ -1345,9 +1511,19 @@ export async function scrapeProduct(url: string, userId?: number): Promise<Scrap
     if (!result.price && !usedBrowser) {
       console.log(`[Scraper] No price found in static HTML for ${url}, trying headless browser...`);
       try {
-        html = await scrapeWithBrowser(url);
+        const browserResult = await scrapeWithBrowser(url, siteContext);
+        html = browserResult.html;
+        lastBrowserResult = browserResult;
         usedBrowser = true;
         const $browser = load(html);
+
+        if (isLikelyRegionalGate(browserResult.html, browserResult.finalUrl)) {
+          const gateOptions = parseRegionalGateOptionsFromPayload(url, browserResult.gatePayloads);
+          if (gateOptions.length > 0) {
+            result.regionalGate = buildRegionalGateInfo(url, gateOptions);
+            return result;
+          }
+        }
 
         // Re-try extraction with browser-rendered HTML
         // Try site-specific scraper
@@ -1477,7 +1653,8 @@ export async function scrapeProductWithVoting(
   preferredMethod?: ExtractionMethod,
   anchorPrice?: number,
   skipAiVerification?: boolean,
-  skipAiExtraction?: boolean
+  skipAiExtraction?: boolean,
+  siteContext?: SiteContext
 ): Promise<ScrapedProductWithCandidates> {
   const result: ScrapedProductWithCandidates = {
     name: null,
@@ -1488,9 +1665,11 @@ export async function scrapeProductWithVoting(
     aiStatus: null,
     priceCandidates: [],
     needsReview: false,
+    regionalGate: null,
   };
 
   let html: string = '';
+  let lastBrowserResult: BrowserScrapeResult | null = null;
 
   // Sites known to require JavaScript rendering
   const jsHeavySites = [
@@ -1508,7 +1687,8 @@ export async function scrapeProductWithVoting(
     // For JS-heavy sites, go straight to browser
     if (requiresBrowser) {
       console.log(`[Voting] ${new URL(url).hostname} requires browser rendering, using Puppeteer...`);
-      html = await scrapeWithBrowser(url);
+      lastBrowserResult = await scrapeWithBrowser(url, siteContext);
+      html = lastBrowserResult.html;
       usedBrowser = true;
     } else {
       // Fetch HTML
@@ -1539,7 +1719,8 @@ export async function scrapeProductWithVoting(
       } catch (axiosError) {
         if (axiosError instanceof AxiosError && axiosError.response?.status === 403) {
           console.log(`[Voting] HTTP blocked (403) for ${url}, using browser...`);
-          html = await scrapeWithBrowser(url);
+          lastBrowserResult = await scrapeWithBrowser(url, siteContext);
+          html = lastBrowserResult.html;
           usedBrowser = true;
         } else {
           throw axiosError;
@@ -1548,6 +1729,14 @@ export async function scrapeProductWithVoting(
     }
 
     let $ = load(html);
+
+    if (lastBrowserResult && isLikelyRegionalGate(lastBrowserResult.html, lastBrowserResult.finalUrl)) {
+      const gateOptions = parseRegionalGateOptionsFromPayload(url, lastBrowserResult.gatePayloads);
+      if (gateOptions.length > 0) {
+        result.regionalGate = buildRegionalGateInfo(url, gateOptions);
+        return result;
+      }
+    }
 
     // Collect candidates from all methods
     const allCandidates: PriceCandidate[] = [];
@@ -1574,9 +1763,18 @@ export async function scrapeProductWithVoting(
     if (allCandidates.length === 0 && !usedBrowser) {
       console.log(`[Voting] No candidates in static HTML, trying browser...`);
       try {
-        html = await scrapeWithBrowser(url);
+        lastBrowserResult = await scrapeWithBrowser(url, siteContext);
+        html = lastBrowserResult.html;
         usedBrowser = true;
         $ = load(html);
+
+        if (isLikelyRegionalGate(lastBrowserResult.html, lastBrowserResult.finalUrl)) {
+          const gateOptions = parseRegionalGateOptionsFromPayload(url, lastBrowserResult.gatePayloads);
+          if (gateOptions.length > 0) {
+            result.regionalGate = buildRegionalGateInfo(url, gateOptions);
+            return result;
+          }
+        }
 
         // Re-run all extraction methods
         allCandidates.push(...extractJsonLdCandidates($));
