@@ -260,9 +260,22 @@ function extractSiteSpecificCandidates($: CheerioAPI, url: string): { candidates
 }
 
 // Extract price candidates from generic CSS selectors
-function extractGenericCssCandidates($: CheerioAPI): PriceCandidate[] {
+function extractGenericCssCandidates($: CheerioAPI, url?: string): PriceCandidate[] {
   const candidates: PriceCandidate[] = [];
   const seen = new Set<number>();
+  const isAmazon = !!url && /amazon\./i.test(new URL(url).hostname);
+
+  const isAmazonNoiseText = (value: string): boolean => {
+    if (!isAmazon) return false;
+    const text = (value || '').toLowerCase();
+    return text.includes('%') ||
+      text.includes('list price') ||
+      text.includes('you save') ||
+      text.includes('suggested retail price') ||
+      text.includes('temporary css') ||
+      text.includes('savings') ||
+      text.includes('coupon');
+  };
 
   for (const selector of genericPriceSelectors) {
     const elements = $(selector);
@@ -311,11 +324,14 @@ function extractGenericCssCandidates($: CheerioAPI): PriceCandidate[] {
 
       if (!parsed) {
         const priceStr = content || dataPrice || text;
+        if (isAmazonNoiseText(priceStr)) return;
         parsed = parsePrice(priceStr);
         if (parsed) {
           context = text.trim().slice(0, 50);
         }
       }
+
+      if (isAmazonNoiseText(context)) return;
 
       if (parsed && parsed.price > 0 && !seen.has(parsed.price)) {
         seen.add(parsed.price);
@@ -440,6 +456,28 @@ function shouldOverrideCurrency(
   const currentCount = counts.get(current) || 0;
 
   return inferredCount >= 2 && inferredCount > currentCount;
+}
+
+function filterLowSignalCandidates(candidates: PriceCandidate[], url: string): PriceCandidate[] {
+  const hostname = new URL(url).hostname.toLowerCase();
+  const isAmazon = hostname.includes('amazon.');
+  if (!isAmazon) return candidates;
+
+  return candidates.filter((candidate) => {
+    if (candidate.method !== 'generic-css') return true;
+    const ctx = (candidate.context || '').toLowerCase();
+    if (!ctx) return true;
+
+    return !(
+      ctx.includes('%') ||
+      ctx.includes('list price') ||
+      ctx.includes('you save') ||
+      ctx.includes('suggested retail price') ||
+      ctx.includes('temporary css') ||
+      ctx.includes('savings') ||
+      ctx.includes('coupon')
+    );
+  });
 }
 
 function getDomainDefaultCurrency(url: string): string | null {
@@ -833,6 +871,25 @@ const siteScrapers: SiteScraper[] = [
         return false;
       };
 
+      // Helper to skip crossed/list/"was" prices on deal pages
+      const isStrikethroughOrListPrice = (el: ReturnType<typeof $>) => {
+        const priceContainer = el.closest('.a-price');
+        const classBits = [
+          priceContainer.attr('class') || '',
+          el.parent().attr('class') || '',
+          el.parent().parent().attr('class') || '',
+        ].join(' ').toLowerCase();
+
+        const strikeAttr = (priceContainer.attr('data-a-strike') || '').toLowerCase();
+        if (strikeAttr === 'true') return true;
+
+        if (/a-text-price|basisprice|listprice|strikethrough|strike|old-price|was-price/.test(classBits)) {
+          return true;
+        }
+
+        return false;
+      };
+
       // Collect ALL prices found on the page (for variant/seller support)
       const allPrices: ParsedPrice[] = [];
       const seenPrices = new Set<number>();
@@ -863,6 +920,7 @@ const siteScrapers: SiteScraper[] = [
         for (let i = 0; i < priceElements.length; i++) {
           const el = $(priceElements[i]);
           if (isInCouponContainer(el)) continue;
+          if (isStrikethroughOrListPrice(el)) continue;
 
           const parentClass = el.parent().attr('class') || '';
           if (/savings|coupon|save/i.test(parentClass)) continue;
@@ -877,34 +935,7 @@ const siteScrapers: SiteScraper[] = [
         }
       }
 
-      // 2. "Other Sellers" / "New & Used" prices
-      // Look for "Other Sellers on Amazon" section
-      const otherSellersSelectors = [
-        '#aod-offer-price .a-offscreen',  // "All Offers" display
-        '#olp-upd-new .a-color-price',     // "New from $X"
-        '#olp-upd-used .a-color-price',    // "Used from $X"
-        '#usedBuySection .a-color-price',
-        '#newBuySection .a-color-price',
-        '.olp-from-new-price',
-        '.olp-from-used-price',
-        '#buyNew_noncbb .a-color-price',   // "Buy New" non-buy-box
-      ];
-
-      for (const selector of otherSellersSelectors) {
-        $(selector).each((_, el) => {
-          const text = $(el).text().trim();
-          addPrice(parsePrice(text));
-        });
-      }
-
-      // 3. "New & Used from $X" link text
-      const newUsedLink = $('#usedAndNewBuySection, #newUsedBuyBox, [id*="olp"]').text();
-      const newUsedMatch = newUsedLink.match(/\$[\d,]+\.?\d*/g);
-      if (newUsedMatch) {
-        for (const priceStr of newUsedMatch) {
-          addPrice(parsePrice(priceStr));
-        }
-      }
+      // 2. Intentionally skip other-seller/new-used prices for primary product tracking.
 
       // 4. Subscribe & Save price
       const snsPrice = $('#subscribeAndSavePrice, #sns-price, .sns-price-block .a-offscreen').first().text();
@@ -924,7 +955,7 @@ const siteScrapers: SiteScraper[] = [
 
       for (const selector of fallbackSelectors) {
         const el = $(selector).first();
-        if (el.length && !isInCouponContainer(el)) {
+        if (el.length && !isInCouponContainer(el) && !isStrikethroughOrListPrice(el)) {
           const text = el.text().trim();
           const parsed = parsePrice(text);
           if (parsed && parsed.price >= 2) {
@@ -1787,7 +1818,7 @@ export async function scrapeProduct(url: string, userId?: number, siteContext?: 
         }
 
         if (result.price) {
-          const browserCandidates = normalizeCandidateCurrencies(extractGenericCssCandidates($browser));
+          const browserCandidates = normalizeCandidateCurrencies(extractGenericCssCandidates($browser, url));
           const inferredCurrency = inferMostLikelyCurrency(browserCandidates);
           if (
             inferredCurrency &&
@@ -1995,7 +2026,7 @@ export async function scrapeProductWithVoting(
     console.log(`[Voting] Site-specific found ${siteResult.candidates.length} candidates`);
 
     // 3. Generic CSS extraction
-    const genericCandidates = extractGenericCssCandidates($);
+    const genericCandidates = extractGenericCssCandidates($, url);
     allCandidates.push(...genericCandidates);
     console.log(`[Voting] Generic CSS found ${genericCandidates.length} candidates`);
 
@@ -2025,7 +2056,7 @@ export async function scrapeProductWithVoting(
         if (result.stockStatus === 'unknown' && browserSiteResult.stockStatus !== 'unknown') {
           result.stockStatus = browserSiteResult.stockStatus;
         }
-        allCandidates.push(...extractGenericCssCandidates($));
+        allCandidates.push(...extractGenericCssCandidates($, url));
         console.log(`[Voting] Browser found ${allCandidates.length} total candidates`);
       } catch (browserError) {
         console.error(`[Voting] Browser fallback failed:`, browserError);
@@ -2052,12 +2083,13 @@ export async function scrapeProductWithVoting(
     }
 
     const normalizedCandidates = normalizeCandidateCurrencies(allCandidates);
+    const filteredCandidates = filterLowSignalCandidates(normalizedCandidates, url);
 
     if (result.price) {
-      const inferredCurrency = inferMostLikelyCurrency(normalizedCandidates);
+      const inferredCurrency = inferMostLikelyCurrency(filteredCandidates);
       if (
         inferredCurrency &&
-        shouldOverrideCurrency(result.price.currency, inferredCurrency, normalizedCandidates)
+        shouldOverrideCurrency(result.price.currency, inferredCurrency, filteredCandidates)
       ) {
         result.price = {
           ...result.price,
@@ -2066,7 +2098,7 @@ export async function scrapeProductWithVoting(
       }
     }
 
-    allCandidates.splice(0, allCandidates.length, ...normalizedCandidates);
+    allCandidates.splice(0, allCandidates.length, ...filteredCandidates);
 
     // Store all candidates
     result.priceCandidates = allCandidates;
