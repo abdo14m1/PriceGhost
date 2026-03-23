@@ -1,4 +1,5 @@
 import axios, { AxiosError } from 'axios';
+import { mkdir } from 'node:fs/promises';
 import { load, type CheerioAPI } from 'cheerio';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -582,19 +583,47 @@ export function parseRegionalGateOptionsFromPayload(domain: string, payloads: st
 
 // Browser-based scraping for sites that block HTTP requests (e.g., Cloudflare)
 async function scrapeWithBrowser(url: string, siteContext?: SiteContext): Promise<BrowserScrapeResult> {
+  const browserExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+  const browserHome = process.env.HOME || '/tmp';
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME || '/tmp/.chromium';
+  const xdgCacheHome = process.env.XDG_CACHE_HOME || '/tmp/.chromium';
+  const userDataDir = '/tmp/.chromium-user-data';
+  const crashDumpsDir = '/tmp/.chromium-crash';
+
+  await Promise.all([
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(xdgCacheHome, { recursive: true }),
+    mkdir(userDataDir, { recursive: true }),
+    mkdir(crashDumpsDir, { recursive: true }),
+  ]);
+
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'n/a';
+  console.log(
+    `[Browser] Launching Chromium (exec: ${browserExecutablePath || 'bundled'}, HOME: ${browserHome}, XDG_CONFIG_HOME: ${xdgConfigHome}, XDG_CACHE_HOME: ${xdgCacheHome}, uid: ${uid})`
+  );
+
   const browser = await puppeteer.launch({
     headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-gpu',
       '--disable-blink-features=AutomationControlled',
       '--disable-infobars',
       '--disable-crash-reporter',
+      `--user-data-dir=${userDataDir}`,
+      `--crash-dumps-dir=${crashDumpsDir}`,
       '--window-size=1920,1080',
       '--start-maximized',
     ],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    executablePath: browserExecutablePath,
+    env: {
+      ...process.env,
+      HOME: browserHome,
+      XDG_CONFIG_HOME: xdgConfigHome,
+      XDG_CACHE_HOME: xdgCacheHome,
+    },
     ignoreDefaultArgs: ['--enable-automation'],
   });
 
