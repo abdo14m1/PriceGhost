@@ -25,13 +25,26 @@ const initDatabase = async () => {
         url TEXT NOT NULL,
         name VARCHAR(255),
         image_url TEXT,
+        site_context JSONB,
         refresh_interval INTEGER DEFAULT 3600,
         last_checked TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(user_id, url)
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
     console.log('Created products table');
+
+    await client.query(`
+      ALTER TABLE products DROP CONSTRAINT IF EXISTS products_user_id_url_key;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_products_user_url_storefront_unique
+      ON products (
+        user_id,
+        url,
+        COALESCE(site_context->>'countryCode', ''),
+        COALESCE(site_context->>'storefrontId', '')
+      );
+    `);
+    console.log('Ensured storefront-aware products uniqueness');
 
     // Create price_history table
     await client.query(`

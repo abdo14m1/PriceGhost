@@ -71,8 +71,7 @@ CREATE TABLE IF NOT EXISTS products (
   price_drop_threshold DECIMAL(10,2),
   target_price DECIMAL(10,2),
   notify_back_in_stock BOOLEAN DEFAULT false,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(user_id, url)
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Migration: Add stock_status column if it doesn't exist (for existing databases)
@@ -96,6 +95,17 @@ BEGIN
     ALTER TABLE products ADD COLUMN site_context JSONB;
   END IF;
 END $$;
+
+-- Migration: Replace legacy unique(user_id, url) with storefront-aware uniqueness
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_user_id_url_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_user_url_storefront_unique
+ON products (
+  user_id,
+  url,
+  COALESCE(site_context->>'countryCode', ''),
+  COALESCE(site_context->>'storefrontId', '')
+);
 
 -- Migration: Add notification columns to products if they don't exist
 DO $$

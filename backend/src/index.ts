@@ -57,8 +57,7 @@ async function runMigrations() {
         price_drop_threshold DECIMAL(10,2),
         target_price DECIMAL(10,2),
         notify_back_in_stock BOOLEAN DEFAULT false,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(user_id, url)
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
       -- Price history table
@@ -232,6 +231,19 @@ async function runMigrations() {
 
       CREATE INDEX IF NOT EXISTS idx_site_gate_configs_domain
       ON site_gate_configs(domain);
+    `);
+
+    // Replace legacy unique(user_id, url) with storefront-aware uniqueness
+    await client.query(`
+      ALTER TABLE products DROP CONSTRAINT IF EXISTS products_user_id_url_key;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_products_user_url_storefront_unique
+      ON products (
+        user_id,
+        url,
+        COALESCE(site_context->>'countryCode', ''),
+        COALESCE(site_context->>'storefrontId', '')
+      );
     `);
 
     // Create notification_history table for tracking all triggered notifications
