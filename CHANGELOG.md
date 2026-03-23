@@ -5,6 +5,41 @@ All notable changes to PriceGhost will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-03-23
+
+### Added
+
+- **Regional storefront gate flow** for gated marketplaces (starting with Trendyol)
+  - Detects country/storefront gate responses and prompts storefront selection during add flow
+  - Caches gate options in `site_gate_configs` to avoid repeated discovery scraping
+- **Persisted site context per product** (`site_context`)
+  - Stores storefront/country/language context and reuses it in manual refresh + scheduler checks
+
+### Changed
+
+- **Storefront-aware product uniqueness**
+  - Replaced legacy `UNIQUE(user_id, url)` behavior with storefront-aware uniqueness using `site_context` (`countryCode`, `storefrontId`)
+  - Same product URL can now be tracked in multiple storefronts/currencies by the same user
+- **Storefront selection UX**
+  - Storefront selector now appears as a centered modal overlay with blurred backdrop, matching price selector behavior
+  - Storefront list now shows country only (no store IDs/language metadata)
+
+### Fixed
+
+- **Trendyol extraction accuracy**
+  - Replaced placeholder gate title fallback (`Trendyol: Shop from essentials to extras`) with real product names
+  - Improved JSON-LD handling and international extraction reliability
+- **Currency handling end-to-end**
+  - Added parser + UI support for `SAR`, `AED`, `QAR`, `KWD`, `OMR`, `BHD`, and `EGP`
+  - Preserved selected currency during reviewed product creation instead of defaulting to USD
+- **Amazon pricing noise reduction**
+  - Improved `amazon.eg` currency resolution to `EGP`
+  - Filtered strikethrough/list-price signals and low-signal sale/coupon contexts in candidate voting
+  - Prioritized primary listing prices by skipping noisy other-seller/new-used price sources in Amazon site-specific extraction
+- **Price selection modal behavior**
+  - Deduplicates identical price entries across methods and shows a single consolidated option
+  - Fixed selection-state bug where clicking a different candidate could be reset unexpectedly
+
 ## [1.0.6] - 2026-01-26
 
 ### Added
@@ -219,6 +254,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.0.7 | 2026-03-23 | Regional storefront gates, storefront-aware tracking uniqueness, Trendyol and Amazon currency/extraction fixes |
 | 1.0.6 | 2026-01-26 | Google Gemini AI support, self-hosted ntfy support |
 | 1.0.5 | 2026-01-25 | AI model selector, per-product AI controls, Gotify support, Ollama fixes |
 | 1.0.4 | 2026-01-24 | Multi-strategy price voting system with user selection for ambiguous prices |
