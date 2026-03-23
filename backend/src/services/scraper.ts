@@ -32,6 +32,12 @@ function appendQuotaWarning(
   return mergeAIWarning(warnings, warning);
 }
 
+function isNavigationTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes('navigation timeout') || (message.includes('timeout') && message.includes('navigation'));
+}
+
 export type StockStatus = 'in_stock' | 'out_of_stock' | 'unknown';
 
 // Extraction method types for multi-strategy voting
@@ -576,6 +582,8 @@ export function parseRegionalGateOptionsFromPayload(domain: string, payloads: st
 async function scrapeWithBrowser(url: string, siteContext?: SiteContext): Promise<BrowserScrapeResult> {
   const chromiumUserDataDir = process.env.CHROMIUM_USER_DATA_DIR || '/tmp/chrome-user-data';
   const chromiumCrashDumpsDir = process.env.CHROMIUM_CRASH_DUMPS_DIR || '/tmp/chrome-crashpad';
+  const hostname = new URL(url).hostname.toLowerCase();
+  const preferDomContentLoaded = hostname.includes('trendyol.com');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -632,11 +640,59 @@ async function scrapeWithBrowser(url: string, siteContext?: SiteContext): Promis
       );
     }
 
-    // Navigate to the page and wait for content to load
-    await page.goto(url, {
-      waitUntil: 'networkidle2',
-      timeout: 45000,
-    });
+    // Navigate to the page and wait for enough content to extract from.
+    // Some sites (e.g. Trendyol) keep long-lived background requests open,
+    // so waiting for network idle can time out even when DOM is ready.
+    let navigationDone = false;
+    let lastNavigationError: unknown = null;
+
+    try {
+      await page.goto(url, {
+        waitUntil: preferDomContentLoaded ? 'domcontentloaded' : 'networkidle2',
+        timeout: 45000,
+      });
+      navigationDone = true;
+    } catch (navigationError) {
+      lastNavigationError = navigationError;
+
+      if (!isNavigationTimeoutError(navigationError)) {
+        throw navigationError;
+      }
+
+      console.warn(
+        `[Browser] Primary navigation timed out for ${url}, retrying with domcontentloaded...`
+      );
+
+      try {
+        await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        });
+        navigationDone = true;
+      } catch (fallbackError) {
+        lastNavigationError = fallbackError;
+
+        if (!isNavigationTimeoutError(fallbackError)) {
+          throw fallbackError;
+        }
+
+        console.warn(
+          `[Browser] Fallback navigation timed out for ${url}; using current DOM snapshot if available.`
+        );
+      }
+    }
+
+    if (!navigationDone && page.url() === 'about:blank') {
+      throw (lastNavigationError instanceof Error
+        ? lastNavigationError
+        : new Error(`Navigation failed for ${url}`));
+    }
+
+    try {
+      await page.waitForSelector('body', { timeout: 10000 });
+    } catch {
+      console.warn(`[Browser] Body selector did not appear in time for ${url}; continuing.`);
+    }
 
     // Add some human-like behavior
     await page.mouse.move(100, 200);
